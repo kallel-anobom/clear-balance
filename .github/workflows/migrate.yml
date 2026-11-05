@@ -1,0 +1,34 @@
+name: Migrar banco (produção)
+
+# Manual de propósito: migrações alteram o banco real, então só rodam quando você pedir
+# e (se configurado) depois de aprovação no ambiente "production".
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: migrate-production
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Aplicar migrações pendentes
+        run: npm run db:migrate
+        env:
+          # Secret do ambiente "production" no GitHub: URL do Session pooler (porta 5432).
+          MIGRATE_DATABASE_URL: ${{ secrets.MIGRATE_DATABASE_URL }}

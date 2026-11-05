@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Cancela execuções antigas da mesma branch/PR.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Typecheck, testes e build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # Banco descartável, só para os testes. NUNCA aponte para o Supabase de produção.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: clearbalance
+          POSTGRES_PASSWORD: clearbalance_ci
+          POSTGRES_DB: clearbalance
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U clearbalance -d clearbalance"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://clearbalance:clearbalance_ci@127.0.0.1:5432/clearbalance
+      # Faz os testes de integração falharem (em vez de serem pulados) se o banco não estiver acessível.
+      REQUIRE_DB_TESTS: '1'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Testes
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  secrets-scan:
+    name: Varredura de segredos
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  audit:
+    name: Auditoria de dependências
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci --ignore-scripts
+
+      # Só falha para vulnerabilidade alta/crítica em dependências de produção.
+      - run: npm audit --omit=dev --audit-level=high
