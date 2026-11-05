@@ -21,6 +21,10 @@ try {
 } catch {
   available = false;
 }
+// No CI o banco precisa existir: falhar é melhor do que "passar" pulando os testes.
+if (!available && process.env.REQUIRE_DB_TESTS) {
+  throw new Error('REQUIRE_DB_TESTS está ligado, mas o PostgreSQL de teste não está acessível.');
+}
 
 describe.skipIf(!available)('API + PostgreSQL', () => {
   let app: Awaited<ReturnType<(typeof import('../src/server.js'))['buildApp']>>;
