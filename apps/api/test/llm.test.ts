@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { AiError, amountsInText, interpretWithAi, type AiOptions } from '../src/importer/llm.js';
+import { AI_CHUNK_LINES, AI_MAX_CHUNKS, AiError, amountsInText, interpretWithAi, splitForAi, type AiOptions } from '../src/importer/llm.js';
 
 const categories = [
   { slug: 'mercado', name: 'Mercado', kind: 'expense' as const },
@@ -97,5 +97,54 @@ describe('interpretWithAi', () => {
 describe('amountsInText', () => {
   it('lê valores no formato brasileiro', () => {
     expect([...amountsInText('R$ 1.234,56 e 8,90 e 12/11/2026')].sort((a, b) => a - b)).toEqual([890, 123456]);
+  });
+});
+
+describe('extrato grande: trechos em paralelo', () => {
+  const lines = (n: number) => Array.from({ length: n }, (_, i) => `${String((i % 28) + 1).padStart(2, '0')}/11 LOJA ${i} ${i + 1},00`);
+
+  it('texto curto vai inteiro em uma chamada', () => {
+    const t = lines(AI_CHUNK_LINES).join('\n');
+    expect(splitForAi(t)).toEqual([t]);
+  });
+
+  it('divide em trechos sem perder nem repetir linhas, e nunca passa do máximo de trechos', () => {
+    for (const n of [AI_CHUNK_LINES + 1, 127, 400]) {
+      const all = lines(n);
+      const parts = splitForAi(all.join('\n'));
+      expect(parts.length).toBeGreaterThan(1);
+      expect(parts.length).toBeLessThanOrEqual(AI_MAX_CHUNKS);
+      const joined = parts.flatMap((p) => p.split('\n').filter((l) => !l.startsWith('(contexto')));
+      expect(joined).toEqual(all);
+    }
+  });
+
+  it('corta antes de linha com data e leva a data do grupo anterior como contexto', () => {
+    const body = ['05 NOV', ...Array.from({ length: 40 }, (_, i) => `LOJA ${i}`), '04 NOV', ...Array.from({ length: 40 }, (_, i) => `BAR ${i}`)];
+    const parts = splitForAi(body.join('\n'));
+    expect(parts.length).toBeGreaterThan(1);
+    expect(parts[1]).toContain('(contexto, não registrar: data do grupo anterior 05 NOV)');
+    expect(parts[0]).not.toContain('contexto');
+  });
+
+  it('chama a IA uma vez por trecho, em paralelo, junta as linhas e soma o uso', async () => {
+    const all = Array.from({ length: 80 }, (_, i) => `${String((i % 28) + 1).padStart(2, '0')}/11 LOJA ${i} 10,${String(i).padStart(2, '0')}`);
+    const text = all.join('\n');
+    const f = vi.fn(async (_u: string, init: RequestInit) => {
+      const content = JSON.parse(init.body as string).messages[0].content as string;
+      const mine = content.split('\n').filter((l) => /^\d\d\/11 LOJA/.test(l));
+      return reply({ lancamentos: mine.map((l) => item({ description: l.split(' 10,')[0], amount_cents: 1000 + Number(l.slice(-2)) })) });
+    });
+    const r = await interpretWithAi(text, base(f as never));
+    expect(f.mock.calls.length).toBe(splitForAi(text).length);
+    expect(f.mock.calls.length).toBeGreaterThan(1);
+    expect(r.rows).toHaveLength(80);
+    expect(r.usage).toEqual({ input_tokens: 10 * f.mock.calls.length, output_tokens: 5 * f.mock.calls.length });
+  });
+
+  it('se um trecho falha, nada é importado', async () => {
+    let n = 0;
+    const f = vi.fn(async () => (n++ === 0 ? new Response('{}', { status: 500 }) : reply({ lancamentos: [item({})] })));
+    await expect(interpretWithAi(lines(100).join('\n'), base(f as never))).rejects.toMatchObject({ code: 'upstream' });
   });
 });

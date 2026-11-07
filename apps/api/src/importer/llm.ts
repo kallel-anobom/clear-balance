@@ -42,6 +42,7 @@ Regras:
 - date em AAAA-MM-DD. Se o texto não tiver o ano, deduza pelo mês de referência (meses depois dele pertencem ao ano anterior). Use null se não houver data.
 - description: copie como está no texto (dados pessoais já foram removidos).
 - category_slug: use exatamente um dos slugs permitidos ou null.
+- O texto pode ser só um trecho de um extrato maior. Uma linha entre parênteses no início do trecho é apenas contexto (ex.: a data do grupo anterior): nunca a registre como lançamento.
 - Responda apenas chamando a ferramenta ${TOOL}.`;
 
 const inputSchema = {
@@ -96,34 +97,76 @@ function buildPrompt(text: string, o: AiOptions): string {
   ].filter(Boolean).join('\n\n');
 }
 
+/** Trechos de ~35 linhas, em paralelo: a resposta da IA é gerada token a token, então um extrato inteiro estoura o tempo. */
+export const AI_CHUNK_LINES = 35;
+export const AI_MAX_CHUNKS = 6;
+const DATE_ONLY = /^\s*(hoje|ontem|\d{1,2}\s+(de\s+)?[a-zç]{3,9}\.?(\s+(de\s+)?\d{2,4})?|\d{1,2}\/\d{1,2}(\/\d{2,4})?)\s*$/i;
+const STARTS_WITH_DATE = /^\s*(hoje|ontem|\d{1,2}[\s/])/i;
+
+/**
+ * Divide o texto em trechos para a IA, preferindo cortar antes de uma linha que começa com data (início de lançamento
+ * ou de grupo). Cada trecho depois do primeiro recebe, entre parênteses, a última data de grupo vista antes dele.
+ */
+export function splitForAi(text: string): string[] {
+  const lines = text.split('\n');
+  if (lines.length <= AI_CHUNK_LINES) return [text];
+  const size = Math.max(AI_CHUNK_LINES, Math.ceil(lines.length / AI_MAX_CHUNKS));
+  const chunks: string[] = [];
+  let start = 0;
+  let header: string | null = null;
+  while (start < lines.length) {
+    let end = Math.min(lines.length, start + size);
+    if (end < lines.length) {
+      for (let i = end; i > Math.max(start + 1, end - 12); i--) {
+        if (STARTS_WITH_DATE.test(lines[i])) { end = i; break; }
+      }
+    }
+    const body = lines.slice(start, end);
+    chunks.push((header && start > 0 ? [`(contexto, não registrar: data do grupo anterior ${header})`, ...body] : body).join('\n'));
+    for (const l of body) if (DATE_ONLY.test(l)) header = l.trim();
+    start = end;
+  }
+  return chunks;
+}
+
 export async function interpretWithAi(text: string, o: AiOptions): Promise<AiResult> {
   if (!o.apiKey) throw new AiError('no_key', 'A IA não está configurada no servidor (falta a chave da Anthropic).', 503);
   if (text.length > MAX_AI_TEXT_CHARS) {
     throw new AiError('too_big', 'O texto é grande demais para a IA de uma vez. Envie menos páginas ou divida o extrato.', 413);
   }
-  const { input, usage } = await callAnthropicTool({
-    apiKey: o.apiKey,
-    model: o.model,
-    system: SYSTEM,
-    user: buildPrompt(text, o),
-    tool: { name: TOOL, description: 'Registra os lançamentos encontrados no extrato.', input_schema: inputSchema },
-    maxTokens: 8192,
-    timeoutMs: o.timeoutMs,
-    fetchImpl: o.fetchImpl,
-    messages: {
-      timeout: 'A IA demorou demais para responder. Tente com menos páginas.',
-      too_big: 'A resposta da IA ficou grande demais. Envie menos páginas por vez.',
-    },
-  });
-  const parsed = outputSchema.safeParse(input);
-  if (!parsed.success) throw new AiError('bad_output', 'A IA devolveu uma resposta fora do formato esperado. Nada foi importado.', 502);
+  const results = await Promise.all(
+    splitForAi(text).map(async (part) => {
+      const { input, usage } = await callAnthropicTool({
+        apiKey: o.apiKey,
+        model: o.model,
+        system: SYSTEM,
+        user: buildPrompt(part, o),
+        tool: { name: TOOL, description: 'Registra os lançamentos encontrados no extrato.', input_schema: inputSchema },
+        maxTokens: 8192,
+        timeoutMs: o.timeoutMs,
+        fetchImpl: o.fetchImpl,
+        messages: {
+          timeout: 'A IA demorou demais para responder. Tente de novo ou com menos páginas.',
+          too_big: 'A resposta da IA ficou grande demais. Envie menos páginas por vez.',
+        },
+      });
+      const out = outputSchema.safeParse(input);
+      if (!out.success) throw new AiError('bad_output', 'A IA devolveu uma resposta fora do formato esperado. Nada foi importado.', 502);
+      return { items: out.data.lancamentos, usage };
+    }),
+  );
+  const items = results.flatMap((r) => r.items);
+  const usages = results.map((r) => r.usage).filter((u): u is NonNullable<typeof u> => u !== null);
+  const usage = usages.length
+    ? { input_tokens: usages.reduce((n, u) => n + u.input_tokens, 0), output_tokens: usages.reduce((n, u) => n + u.output_tokens, 0) }
+    : null;
 
   const known = amountsInText(text);
   const slugs = new Set(o.categories.map((c) => c.slug));
   const rows: ParsedRow[] = [];
   let dropped = 0;
   let unknownAmounts = 0;
-  for (const raw of parsed.data.lancamentos) {
+  for (const raw of items) {
     const it = itemSchema.safeParse(raw);
     if (!it.success) { dropped++; continue; }
     const v = it.data;
