@@ -44,14 +44,15 @@ Só faça isso em uma rede de confiança (sem login, qualquer pessoa na rede ver
 
 | Tela | O que mostra |
 | --- | --- |
-| **Visão do mês** | Gasto realizado (minha parte e total pago), quanto ainda vai sair e quando, salários (bruto, descontos, líquido), saldo/sobra prevista, reembolsos a receber, cheque especial, gasto por categoria e **pendências**. |
+| **Visão do mês** | **Custo total do mês** (minha parte, com o detalhamento de como chegamos nele), gasto já realizado × ainda previsto, quanto ainda vai sair e quando, salários (bruto, descontos, líquido), saldo/sobra prevista, reembolsos a receber, cheque especial, gasto por categoria e **pendências**. |
 | **Lançamentos** | Receitas, despesas, transferências, reembolsos, pagamentos de fatura e do cheque especial. Filtros por mês, categoria, conta, cartão, tipo, situação e “só para revisar”. Edição de categoria/descrição, marcar para revisar, marcar como pago/recebido, registrar reembolso. |
 | **Cartões e faturas** | Cartões, faturas (fechamento, vencimento e pagamento — três datas separadas), compras de cada fatura, total confirmado × estimado, conferência da soma, pagar fatura, vincular pagamentos soltos e **parcelas futuras** (quanto ainda cai em cada mês). |
 | **Importação** | CSV, PDF e **imagens de extratos** (OCR no navegador) com **revisão antes de salvar**, detecção de duplicatas e de parcelas, vínculo a itens já previstos e apagar importações. |
-| **Configurações** | Conta e segurança (2FA), contas e saldos (informados por você), recorrências/dados iniciais, nomes de transferências próprias, privacidade, backup e apagar dados. |
+| **Configurações** | Conta e segurança (2FA), contas e saldos (informados por você), recorrências/dados iniciais, nomes de transferências próprias, **regras aprendidas**, privacidade, backup e apagar dados. |
 
 ## Regras financeiras implementadas
 
+- **Custo total do mês** (número principal da *Visão do mês*): tudo o que o mês custa **por competência**, na **minha parte**: compras no cartão pela data da compra + contas pagas + contas ainda previstas (incluindo parcelas e itens estimados, sinalizados). Ao abrir *Como chegamos no custo do mês* você vê o total por origem (parcelas, compras no cartão, recorrentes, outras contas) e, separado, o que **não entra** para não contar duas vezes: pagamento de fatura, transferências entre minhas contas, amortização do cheque especial, a parte dos outros em despesas divididas e reembolsos. Já o card *Ainda vai sair da conta (caixa)* mostra o que falta pagar, que é outra pergunta.
 - **Gasto ≠ saída de caixa.** Compra no cartão é gasto na **data da compra**. O pagamento da fatura é **saída de caixa** na **data do pagamento** e nunca é somado como despesa (não há contagem dupla).
 - **Transferências entre minhas contas** (ex.: PIX para “Fulano de Tal”) não são despesa nem receita. Os nomes que identificam transferências próprias ficam em *Configurações*.
 - **Despesa compartilhada:** guarda o valor total, **minha parte** (meu custo pessoal), a parte dos outros e os reembolsos. A visão mostra seu gasto pela *minha parte* e a saída de caixa pelo *total pago*. Reembolso recebido é entrada de caixa (não é receita) e não altera o seu gasto.
@@ -96,13 +97,24 @@ Itens mensais gerados ficam como **previstos / pendentes** (não pagos) até voc
 - **CSV:** detecta separador (`;` `,` tab), codificação (UTF-8/Latin-1), cabeçalho e formato brasileiro de datas/valores. Se não reconhecer as colunas, você mapeia manualmente. Em faturas, valor positivo = compra; há opção para inverter sinais.
 - **PDF e imagens (lidos no seu navegador):** PDFs com texto são lidos com pdf.js; **imagens e PDFs escaneados** passam por OCR (Tesseract, em português) **no próprio navegador** — o arquivo nunca é enviado a ninguém e o modelo do OCR é servido pelo próprio site (sem CDN de terceiros). Só o **texto** resultante vai para a API, que o interpreta no padrão `DATA  DESCRIÇÃO  VALOR` (datas sem ano usam o mês de referência informado). Texto vindo de OCR **nunca é tratado como confiável**: as linhas chegam desmarcadas, com aviso, e você compara com a imagem (botão “Já conferi: marcar todas” quando terminar). O sistema compara a soma das linhas com o total lido na fatura. **Se não conseguir interpretar com segurança** (nenhuma linha reconhecida, soma não confere, entrada/saída ambígua), ele **não inventa valores**: avisa e permite digitar manualmente. PDFs com senha são recusados (remova a proteção antes; o sistema não pede nem guarda senhas). Dicas para o OCR: use o print inteiro, sem cortes, com boa resolução; prints em modo escuro são invertidos automaticamente.
 - **Duplicatas:** reimportar o mesmo arquivo é detectado (hash de data+valor+descrição, sem guardar o texto). Também sinaliza “possível duplicata” de lançamentos já cadastrados (mesmo valor, data próxima) e permite vincular a itens previstos (ex.: o aluguel previsto vira pago em vez de duplicar).
-- **Sugestões automáticas** (sempre editáveis): transferências próprias, pagamento de fatura, juros/tarifas e pagamento do cheque especial, categorias por palavras-chave e pelo histórico de descrições iguais.
+- **Prints de apps de banco:** além do formato `DATA DESCRIÇÃO VALOR`, o leitor reconhece telas em que a data é título de grupo (“05 NOV”, “Hoje”, “Ontem”), com descrição e valor em linhas separadas ou invertidas, e valores como `- R$ 12,30`. Linhas sem data ou sem sinal ficam desmarcadas e pedem que você informe. Quando algo sai errado, a tela mostra o **texto lido** (editável, com *Reprocessar*), permite **colar o texto** do extrato e explica os números lidos (linhas, valores reconhecidos). Erros de rede, sessão expirada e servidor indisponível têm mensagens próprias.
+- **Sugestões automáticas** (sempre editáveis): transferências próprias, pagamento de fatura, juros/tarifas e pagamento do cheque especial, categorias por palavras-chave e pelo histórico de descrições iguais, e as **regras aprendidas** (abaixo).
+
+### Aprendizado local (regras aprendidas)
+
+Quando você corrige o tipo ou a categoria de uma linha e deixa marcado **“lembrar esta correção”**, o sistema guarda uma regra e a aplica nas próximas importações (a linha ganha a marca *aprendida*). **Não é uma IA externa:** é um dicionário simples na sua própria base, sem envio de nada para fora.
+
+- **O que é guardado:** só o nome normalizado do estabelecimento (sem acentos, números, códigos, parcelas; até 3 palavras), a categoria, o tipo e quantas vezes foi confirmada. **Nunca** valores, datas ou o texto do extrato.
+- **Prioridade:** regra aprendida > categoria do histórico > palavras-chave. A regra é separada por conta e por cartão e só vale se fizer sentido (cartão só tem compras; uma entrada não vira pagamento de fatura).
+- **Controle:** em *Configurações → Regras aprendidas* você edita categoria/tipo, marca *ignorar sempre*, esquece uma regra ou todas. *Apagar todos os dados* também apaga as regras.
+
 
 ## Privacidade e dados
 
 - **Local:** dados somente no PostgreSQL do seu computador (volume Docker `clear_balance_pgdata`), que só escuta em `127.0.0.1`. **Hospedado:** dados no **seu** projeto Supabase, acessíveis só depois do login e da checagem do seu e-mail na API; nenhum outro serviço recebe seus dados (o OCR roda no navegador).
 - **Não são armazenados:** senhas bancárias, tokens, CVV, número completo de cartão (apenas os 4 últimos dígitos, se informados) nem os arquivos importados — só os lançamentos aprovados na revisão.
 - A API não registra corpo de requisições nem conteúdo de extratos/PDFs em logs (nível `warn`, erros sem detalhes do banco).
+- **Regras aprendidas** guardam apenas nome de estabelecimento e classificação (veja *Aprendizado local*).
 - **Apagar:** *Importação → Apagar importação*, *Configurações → Apagar tudo que foi importado* e *Apagar todos os dados* (exige digitar `APAGAR TUDO`).
 
 ### Backup local
