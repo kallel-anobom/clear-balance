@@ -373,6 +373,7 @@ export default function ImportPage({ month }: { month: string }) {
                   )}
                 </div>
                 <div className="import-notes">
+                  {r.similar && <Badge tone="info" title="Categoria sugerida por semelhança com um estabelecimento que você já classificou.">parecido com “{r.similar.pattern}”</Badge>}
                   {r.ai && <Badge tone="warn" title="Linha proposta pela IA: confira data, valor e entrada/saída com o extrato.">IA: conferir</Badge>}
                   {r.learned && <Badge tone="info" title="Classificação lembrada de correções anteriores. Gerencie em Configurações › Regras aprendidas.">aprendida ({r.learned.uses}×)</Badge>}
                   {r.installment && <Badge tone="info" title="Compra parcelada">parcela {r.installment.no}/{r.installment.total}</Badge>}
