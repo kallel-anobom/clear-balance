@@ -32,6 +32,9 @@ describe.skipIf(!available)('API + PostgreSQL', () => {
 
   beforeAll(async () => {
     process.env.DATABASE_URL = TEST_URL;
+    // O teste não pode depender do .env de quem roda (no CI ele não existe).
+    // Só vale fora de produção; o bloco "login" abaixo testa a API com autenticação ligada.
+    process.env.AUTH_DISABLED = 'true';
     const { seed } = await import('../src/seed.js');
     const { buildApp } = await import('../src/server.js');
     const { pool } = await import('../src/db.js');
