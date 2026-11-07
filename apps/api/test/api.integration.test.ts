@@ -710,6 +710,88 @@ describe.skipIf(!available)('API + PostgreSQL', () => {
     });
   });
 
+  describe('resumo do mês com IA (Anthropic simulada)', () => {
+    let config: Awaited<typeof import('../src/config.js')>['config'];
+    const original = {} as Record<string, unknown>;
+    const summary = () => json('POST', '/overview/summary?month=2032-05');
+    const reply = (input: unknown) => new Response(JSON.stringify({ content: [{ type: 'tool_use', name: 'registrar_resumo', input }] }), { status: 200 });
+    const sentContent = (net: ReturnType<typeof vi.fn>) =>
+      JSON.parse(((net.mock.calls[0] as unknown[])[1] as RequestInit).body as string).messages[0].content as string;
+    const fact = (content: string, label: string) => content.match(new RegExp(`- ${label}: (.+)`))![1];
+
+    beforeAll(async () => {
+      ({ config } = await import('../src/config.js'));
+      Object.assign(original, { key: config.anthropicApiKey, limit: config.aiMonthlyLimit });
+      const account = (await json('POST', '/accounts', { name: 'Conta Segredo Resumo' })).body.id;
+      const cats = (await json('GET', '/categories')).body as { id: number; slug: string }[];
+      const mercado = cats.find((c) => c.slug === 'mercado')!.id;
+      const post = (description: string, month: string, cents: number) =>
+        json('POST', '/transactions', { type: 'expense', description, account_id: account, occurred_on: `${month}-10`, total_cents: cents, category_id: mercado });
+      await post('PADARIA SECRETA 77', '2032-05', 30000);
+      await post('PADARIA SECRETA 78', '2032-04', 10000);
+      await json('PUT', `/budgets/${mercado}`, { limit_cents: 20000 });
+    });
+    afterAll(() => {
+      vi.unstubAllGlobals();
+      config.anthropicApiKey = original.key as string | undefined;
+      config.aiMonthlyLimit = original.limit as number;
+    });
+
+    it('desligada, sem chave ou no limite: recusa sem chamar a rede nem gastar uso', async () => {
+      const net = vi.fn();
+      vi.stubGlobal('fetch', net);
+      config.anthropicApiKey = 'sk-ant-segredo';
+      await json('PUT', '/settings', { ai_enabled: false });
+      expect((await summary()).status).toBe(403);
+      await json('PUT', '/settings', { ai_enabled: true });
+      config.anthropicApiKey = undefined;
+      expect((await summary()).status).toBe(503);
+      config.anthropicApiKey = 'sk-ant-segredo';
+      config.aiMonthlyLimit = 0;
+      expect((await summary()).status).toBe(429);
+      expect((await json('POST', '/overview/summary?month=xx')).status).toBe(400);
+      expect(net).not.toHaveBeenCalled();
+    });
+
+    it('envia só agregados (nunca descrições nem nome da conta), devolve o texto e os fatos enviados, e conta o uso', async () => {
+      config.aiMonthlyLimit = 100;
+      const calls = (await json('GET', '/settings')).body.ai.calls as number;
+      const net = vi.fn(async (_url: string, init: RequestInit) => {
+        const content = JSON.parse(init.body as string).messages[0].content as string;
+        const total = fact(content, 'Custo total do mês \\(minha parte\\)');
+        const avg = fact(content, 'Média dos meses anteriores');
+        return reply({ resumo: `Neste mês você gastou ${total}, acima da média de ${avg}.`, destaques: ['Mercado estourou o orçamento.'], sugestoes: ['Reveja o limite de Mercado.'] });
+      });
+      vi.stubGlobal('fetch', net);
+
+      const r = await summary();
+      expect(r.status).toBe(200);
+      expect(r.body.resumo).toContain('R$ 300,00');
+      expect(r.body.resumo).toContain('R$ 100,00');
+      expect(r.body.facts.length).toBeGreaterThan(5);
+      expect(JSON.stringify(r.body)).not.toContain('sk-ant');
+
+      const sent = ((net.mock.calls[0] as unknown[])[1] as RequestInit).body as string;
+      expect(sent).toContain('Mercado');
+      expect(sent).toContain('R$ 300,00');
+      expect(sent).not.toMatch(/PADARIA|SECRETA|Segredo|2032-05-10/); // nada de descrição, conta ou data
+      expect(sent).toContain('estourou o limite');
+      expect((await json('GET', '/settings')).body.ai.calls).toBe(calls + 1);
+    });
+
+    it('número inventado ou resposta fora do formato: descarta o texto, mas o uso é contado', async () => {
+      const calls = (await json('GET', '/settings')).body.ai.calls as number;
+      vi.stubGlobal('fetch', vi.fn(async () => reply({ resumo: 'Você gastou R$ 999,99 no mês.', destaques: [], sugestoes: [] })));
+      const bad = await summary();
+      expect(bad.status).toBe(422);
+      expect(bad.body.error).toContain('número');
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ content: [{ type: 'text', text: 'oi' }] }), { status: 200 })));
+      expect((await summary()).status).toBe(502);
+      expect((await json('GET', '/settings')).body.ai.calls).toBe(calls + 2);
+      await json('PUT', '/settings', { ai_enabled: false });
+    });
+  });
+
   describe('login (API com autenticação ligada)', () => {
     it('exige token válido de e-mail autorizado; /health é público', async () => {
       const { publicKey, privateKey } = await generateKeyPair('ES256');
