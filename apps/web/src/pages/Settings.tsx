@@ -236,33 +236,6 @@ function AiPanel() {
   );
 }
 
-/** IA opcional (leitor de reserva da importação). Desligada por padrão; a chave existe só no servidor. */
-function AiPanel() {
-  const refresh = useRefresh();
-  const settings = useQuery({ queryKey: ['settings'], queryFn: () => api.get<AppSettings>('/settings') });
-  const toggle = useMutation({ mutationFn: (v: boolean) => api.put('/settings', { ai_enabled: v }), onSuccess: refresh });
-  const ai = settings.data?.ai;
-  return (
-    <Panel title="IA (opcional)">
-      <p className="muted small">
-        Quando o leitor automático não entende um extrato, você pode pedir ajuda ao Claude (Anthropic) pelo botão <strong>Tentar com IA</strong> na importação. Só então o <strong>texto</strong> do extrato é enviado, nunca o arquivo, e antes disso o servidor troca CPF/CNPJ, e-mails, telefones e números de conta ou cartão por marcadores. Nomes de estabelecimentos (e de pessoas, em PIX) seguem no texto. A IA apenas propõe linhas desmarcadas: você revisa tudo antes de salvar.
-      </p>
-      {!ai ? <Loading /> : (
-        <>
-          <label className="check">
-            <input type="checkbox" checked={ai.enabled} disabled={!ai.available || toggle.isPending} onChange={(e) => toggle.mutate(e.target.checked)} /> Ligar a IA como leitor de reserva
-          </label>
-          <p className="small">
-            {ai.available ? <Badge tone="good">chave configurada no servidor</Badge> : <Badge tone="warn">sem chave: defina ANTHROPIC_API_KEY no servidor (Vercel) e faça redeploy</Badge>}
-            {' '}Usos neste mês: <strong>{ai.calls}</strong> de {ai.limit}.
-          </p>
-        </>
-      )}
-      <ErrorBox error={toggle.error} />
-    </Panel>
-  );
-}
-
 export default function SettingsPage() {
   const { accounts } = useLookups();
   const refresh = useRefresh();
