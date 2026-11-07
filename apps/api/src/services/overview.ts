@@ -82,6 +82,21 @@ export interface OverviewInput {
   reimbursements: ReimbursementItem[];
   /** Descrições de despesas anuais cujo mês de pagamento ainda não foi definido. */
   yearlyWithoutMonth: string[];
+  /** Tetos mensais por categoria (orçamento). */
+  budgets?: BudgetRow[];
+}
+
+export interface BudgetRow {
+  category_id: number;
+  category_name: string;
+  limit_cents: number;
+}
+
+export type BudgetStatus = 'ok' | 'near' | 'over';
+/** Perto do teto a partir de 80%; estourou quando passa de 100%. */
+export function budgetStatus(usedCents: number, limitCents: number): BudgetStatus {
+  if (usedCents > limitCents) return 'over';
+  return usedCents >= limitCents * 0.8 ? 'near' : 'ok';
 }
 
 export type FlowKind = 'conta' | 'fatura' | 'cheque_especial';
@@ -149,29 +164,57 @@ export function invoiceAmount(inv: InvoiceRow): { cents: number; estimated: bool
 
 export function computeOverview(input: OverviewInput) {
   const { month, today, txs, invoices, accounts, reimbursements, yearlyWithoutMonth } = input;
+  const budgets = input.budgets ?? [];
   const isCurrentMonth = monthOf(today) === month;
 
   // ---------- 1. Gastos do mês (competência, minha parte) ----------
   const expenses = txs.filter((t) => t.type === 'expense' && t.month_ref === month);
   const realized = expenses.filter((t) => t.status === 'paid');
   const planned = expenses.filter((t) => t.status === 'scheduled');
-  const catMap = new Map<string, { name: string; realized_cents: number; planned_cents: number }>();
+  const catMap = new Map<string, { category_id: number | null; name: string; realized_cents: number; planned_cents: number }>();
   for (const t of expenses) {
     const name = t.category_name ?? 'Sem categoria';
-    const c = catMap.get(name) ?? { name, realized_cents: 0, planned_cents: 0 };
+    const c = catMap.get(name) ?? { category_id: t.category_id ?? null, name, realized_cents: 0, planned_cents: 0 };
     if (t.status === 'paid') c.realized_cents += myShare(t);
     else c.planned_cents += myShare(t);
     catMap.set(name, c);
   }
+  // Categorias com teto mas sem gasto no mês também aparecem (0 de X).
+  for (const b of budgets) {
+    if (![...catMap.values()].some((c) => c.category_id === b.category_id)) {
+      catMap.set(b.category_name, { category_id: b.category_id, name: b.category_name, realized_cents: 0, planned_cents: 0 });
+    }
+  }
+  const budgetOf = new Map(budgets.map((b) => [b.category_id, b.limit_cents]));
+  const byCategory = [...catMap.values()]
+    .map((c) => {
+      const used = c.realized_cents + c.planned_cents;
+      const limit = c.category_id !== null ? (budgetOf.get(c.category_id) ?? null) : null;
+      return {
+        ...c,
+        used_cents: used,
+        budget_cents: limit,
+        remaining_cents: limit === null ? null : limit - used,
+        status: limit === null ? null : budgetStatus(used, limit),
+      };
+    })
+    .sort((a, b) => b.used_cents - a.used_cents);
+  const budgeted = byCategory.filter((c) => c.budget_cents !== null);
+  const budgetSummary = {
+    count: budgeted.length,
+    total_limit_cents: sum(budgeted.map((c) => c.budget_cents!)),
+    total_used_cents: sum(budgeted.map((c) => c.used_cents)),
+    near_count: budgeted.filter((c) => c.status === 'near').length,
+    over_count: budgeted.filter((c) => c.status === 'over').length,
+  };
   const spending = {
     realized_mine_cents: sum(realized.map(myShare)),
     realized_total_cents: sum(realized.map((t) => t.total_cents)),
     planned_mine_cents: sum(planned.map(myShare)),
     planned_total_cents: sum(planned.map((t) => t.total_cents)),
     planned_estimated_count: planned.filter((t) => t.is_estimate).length,
-    by_category: [...catMap.values()].sort(
-      (a, b) => b.realized_cents + b.planned_cents - (a.realized_cents + a.planned_cents),
-    ),
+    by_category: byCategory,
+    budget_summary: budgetSummary,
     // CUSTO TOTAL DO MÊS = tudo que gastei (minha parte), já pago ou ainda previsto.
     total_mine_cents: sum(expenses.map(myShare)),
     estimated_count: expenses.filter((t) => t.is_estimate || t.is_projected).length,

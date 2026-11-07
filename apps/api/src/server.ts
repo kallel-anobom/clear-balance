@@ -14,7 +14,9 @@ import { installmentRoutes } from './routes/installments.js';
 import { invoiceRoutes } from './routes/invoices.js';
 import { overviewRoutes } from './routes/overview.js';
 import { recurringRoutes } from './routes/recurring.js';
+import { budgetRoutes } from './routes/budgets.js';
 import { ruleRoutes } from './routes/rules.js';
+import { subscriptionRoutes } from './routes/subscriptions.js';
 import { transactionRoutes } from './routes/transactions.js';
 
 export async function buildApp(options: { auth?: AuthConfig } = {}) {
@@ -66,6 +68,8 @@ export async function buildApp(options: { auth?: AuthConfig } = {}) {
       await api.register(importRoutes);
       await api.register(dataRoutes);
       await api.register(ruleRoutes);
+      await api.register(budgetRoutes);
+      await api.register(subscriptionRoutes);
     },
     { prefix: '/api' },
   );

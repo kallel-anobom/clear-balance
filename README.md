@@ -111,6 +111,12 @@ Quando você corrige o tipo ou a categoria de uma linha e deixa marcado **“lem
 - **Aplicar aos antigos:** em *Configurações → Regras aprendidas*, o botão *Aplicar aos lançamentos antigos sem categoria* mostra quantos seriam classificados e pede confirmação. Lançamentos que já têm categoria nunca são alterados.
 - **Controle:** em *Configurações → Regras aprendidas* você edita categoria/tipo, marca *ignorar sempre*, esquece uma regra ou todas. *Apagar todos os dados* também apaga as regras.
 
+### Orçamento, comparação e assinaturas
+
+- **Orçamento por categoria:** em *Configurações → Orçamento por categoria* você define **um limite mensal fixo** para cada categoria de despesa (vale para todos os meses; só categorias de despesa). Na *Visão do mês*, *Gasto por categoria* mostra a barra do limite: verde até 80%, amarela de 80% a 100% (*quase no limite*) e vermelha acima (*estourou*), com quanto resta ou quanto passou. O uso é a sua parte do gasto (realizado + previsto).
+- **Comparado aos últimos meses:** o custo do mês contra a **média dos até 3 meses anteriores que têm gastos** (mês vazio não entra, para não puxar a média para baixo; com menos de 3 meses o painel avisa), com a diferença em valor e % e as categorias que mais subiram. API: `GET /api/overview/compare?month=AAAA-MM`.
+- **Assinaturas:** `GET /api/subscriptions` procura nos últimos 12 meses o mesmo estabelecimento (mesmo normalizador das regras), com valor parecido (até 15% da mediana), **3 meses seguidos ou mais** e ainda ativo; ignora parcelas, previstos, lançamentos já gerados por recorrência e estabelecimentos que já têm recorrência cadastrada. Mostra valor típico, última cobrança, reajuste e estimativa anual, e *Criar recorrência* cadastra a mensalidade a partir do mês seguinte. Tudo é calculado no servidor, sem IA.
+- **Migração:** o orçamento usa a tabela `budgets` (`007_budgets.sql`, com RLS). Rode `npm run db:migrate` no banco de produção **antes** de publicar esta versão. *Apagar todos os dados* também apaga os orçamentos.
 
 ### IA opcional (leitor de reserva)
 

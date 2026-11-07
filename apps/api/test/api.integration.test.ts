@@ -552,6 +552,82 @@ describe.skipIf(!available)('API + PostgreSQL', () => {
     });
   });
 
+  describe('orçamento, comparação e assinaturas', () => {
+    type Row = Record<string, any>;
+    let accountId: number;
+    let transporte: number;
+    let receita: number;
+    const spend = async (description: string, month: string, cents: number, categoryId: number | null) =>
+      (await json('POST', '/transactions', {
+        type: 'expense', description, account_id: accountId, occurred_on: `${month}-10`, total_cents: cents, category_id: categoryId,
+      })).body as Row;
+
+    it('orçamento: só categoria de despesa, teto positivo, e aparece no mês com o status', async () => {
+      accountId = (await json('POST', '/accounts', { name: 'Conta Orçamento' })).body.id;
+      const cats = (await json('GET', '/categories')).body as { id: number; slug: string; kind: string }[];
+      transporte = cats.find((c) => c.slug === 'transporte')!.id;
+      receita = cats.find((c) => c.kind === 'income')!.id;
+
+      expect((await json('PUT', `/budgets/${receita}`, { limit_cents: 1000 })).status).toBe(400);
+      expect((await json('PUT', `/budgets/${transporte}`, { limit_cents: 0 })).status).toBe(400);
+      expect((await json('PUT', '/budgets/999999', { limit_cents: 1000 })).status).toBe(404);
+      expect((await json('PUT', `/budgets/${transporte}`, { limit_cents: 20000 })).status).toBe(200);
+      expect((await json('PUT', `/budgets/${transporte}`, { limit_cents: 30000 })).body.limit_cents).toBe(30000);
+      expect((await json('GET', '/budgets')).body).toMatchObject([{ category_id: transporte, limit_cents: 30000 }]);
+
+      // Mês isolado: sem gasto o teto aparece zerado; com gasto vira "perto" e depois "estourou".
+      const cat = async () => (await json('GET', '/overview?month=2031-05')).body.spending.by_category.find((c: Row) => c.category_id === transporte);
+      expect(await cat()).toMatchObject({ used_cents: 0, budget_cents: 30000, status: 'ok' });
+      await spend('CORRIDAS 1', '2031-05', 25000, transporte);
+      expect(await cat()).toMatchObject({ used_cents: 25000, remaining_cents: 5000, status: 'near' });
+      await spend('CORRIDAS 2', '2031-05', 6000, transporte);
+      expect(await cat()).toMatchObject({ used_cents: 31000, remaining_cents: -1000, status: 'over' });
+      expect((await json('GET', '/overview?month=2031-05')).body.spending.budget_summary).toMatchObject({ count: 1, over_count: 1 });
+    });
+
+    it('remover o orçamento tira o status da categoria', async () => {
+      expect((await json('DELETE', `/budgets/${transporte}`)).status).toBe(200);
+      expect((await json('DELETE', `/budgets/${transporte}`)).status).toBe(404);
+      const c = (await json('GET', '/overview?month=2031-05')).body.spending.by_category.find((x: Row) => x.category_id === transporte);
+      expect(c).toMatchObject({ budget_cents: null, status: null });
+      // Deixa um orçamento para o teste de "apagar tudo" provar que ele também é removido.
+      expect((await json('PUT', `/budgets/${transporte}`, { limit_cents: 1000 })).status).toBe(200);
+      expect((await json('GET', '/data/summary')).body.budgets).toBe(1);
+    });
+
+    it('comparação: média dos meses anteriores com gastos e variação por categoria', async () => {
+      // 2031-05 já tem 31000 de transporte (acima). Os 3 meses anteriores: 10000, 20000 e 0 (sem gastos).
+      await spend('ONIBUS A', '2031-04', 10000, transporte);
+      await spend('ONIBUS B', '2031-03', 20000, transporte);
+      const r = (await json('GET', '/overview/compare?month=2031-05')).body;
+      expect(r).toMatchObject({ month: '2031-05', available: true, partial: true, months_used: ['2031-04', '2031-03'], avg_cents: 15000, current_cents: 31000, diff_cents: 16000 });
+      expect(r.categories[0]).toMatchObject({ category_id: transporte, avg_cents: 15000, diff_cents: 16000 });
+      expect(r.top_increases[0].category_id).toBe(transporte);
+      // Sem nenhum mês anterior com gasto, não há o que comparar.
+      expect((await json('GET', '/overview/compare?month=2031-01')).body).toMatchObject({ available: false });
+      expect((await json('GET', '/overview/compare?month=xx')).status).toBe(400);
+    });
+
+    it('assinaturas: lista o que se repete todo mês e não inclui o que já é recorrência', async () => {
+      const { monthOf, addMonths, todayISO } = await import('../src/lib.js');
+      const now = monthOf(todayISO());
+      for (const back of [2, 1, 0]) await spend('STREAMING TESTE 99', addMonths(now, -back), 3990, transporte);
+      const r = (await json('GET', '/subscriptions')).body;
+      const sub = r.items.find((i: Row) => i.merchant === 'streaming teste');
+      expect(sub).toMatchObject({ months_count: 3, typical_cents: 3990, last_month: now });
+      expect(r.total_monthly_cents).toBeGreaterThanOrEqual(3990);
+      expect(Object.keys(sub.draft).sort()).toEqual(['account_id', 'category_id', 'day_of_month', 'description', 'total_cents']);
+
+      // Depois de criar a recorrência, o item sai da lista de sugestões.
+      const rec = await json('POST', '/recurring', {
+        description: 'Streaming Teste', type: 'expense', frequency: 'monthly', day_of_month: 10, total_cents: 3990,
+        start_month: addMonths(now, 1), category_id: transporte,
+      });
+      expect(rec.status).toBe(201);
+      expect((await json('GET', '/subscriptions')).body.items.some((i: Row) => i.merchant === 'streaming teste')).toBe(false);
+    });
+  });
+
   describe('IA opcional (Anthropic simulada)', () => {
     let cardId: number;
     const text = 'Titular CPF 123.456.789-01 e-mail eu@exemplo.com\n02/11 MERCADO CENTRAL 120,50\n03/11 LOJA NOVA 45,00\nTotal 165,50';
@@ -666,7 +742,7 @@ describe.skipIf(!available)('API + PostgreSQL', () => {
     expect((await json('POST', '/data/wipe', {})).status).toBe(400);
     expect((await json('POST', '/data/wipe', { confirm: 'APAGAR TUDO' })).status).toBe(200);
     // A regra criada à mão no bloco de aprendizado também é apagada.
-    expect((await json('GET', '/data/summary')).body).toMatchObject({ transactions: 0, accounts: 0, cards: 0, learned_rules: 0 });
+    expect((await json('GET', '/data/summary')).body).toMatchObject({ transactions: 0, accounts: 0, cards: 0, learned_rules: 0, budgets: 0 });
   });
 
   it('depois de apagar tudo, os dados iniciais podem ser carregados de novo', async () => {

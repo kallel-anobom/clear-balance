@@ -4,6 +4,7 @@ import { api, type Account, type ApplyResult, type AppSettings, type LearnedRule
 import { Badge, Empty, ErrorBox, Field, Loading, Modal, MoneyField, Panel } from '../components';
 import { brl, dateBR, monthShort, todayISO } from '../format';
 import { useLookups, useRefresh } from '../hooks';
+import { BudgetPanel } from '../Budgets';
 import SecurityPanel from '../Security';
 
 const KINDS = { checking: 'Conta corrente', savings: 'Poupança', cash: 'Dinheiro', investment: 'Investimento' } as const;
@@ -315,6 +316,8 @@ export default function SettingsPage() {
         <ErrorBox error={saveNames.error} />
       </Panel>
 
+      <BudgetPanel />
+
       <RulesPanel />
 
       <AiPanel />
@@ -336,7 +339,7 @@ export default function SettingsPage() {
         </div>
         <ErrorBox error={delImports.error} />
         <div className="danger-zone">
-          <p className="small"><strong>Apagar todos os dados</strong> (contas, cartões, faturas, lançamentos, recorrências e regras aprendidas). Não dá para desfazer — faça um backup antes. Digite <code>APAGAR TUDO</code> para confirmar:</p>
+          <p className="small"><strong>Apagar todos os dados</strong> (contas, cartões, faturas, lançamentos, recorrências, orçamentos e regras aprendidas). Não dá para desfazer — faça um backup antes. Digite <code>APAGAR TUDO</code> para confirmar:</p>
           <div className="inline-form">
             <input value={confirmText} onChange={(e) => setConfirmText(e.target.value)} placeholder="APAGAR TUDO" aria-label="Confirmação" />
             <button className="btn danger" disabled={confirmText !== 'APAGAR TUDO' || wipe.isPending} onClick={() => wipe.mutate()}>Apagar tudo</button>
