@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { pool } from '../db.js';
 import { badRequest, notFound } from '../errors.js';
 import { merchantKey } from '../importer/classify.js';
+import { applyRulesToUncategorized } from '../services/rules.js';
 
 const TYPES = ['income', 'expense', 'transfer', 'reimbursement', 'invoice_payment', 'overdraft_payment'] as const;
 
@@ -63,6 +64,12 @@ export async function ruleRoutes(app: FastifyInstance) {
     const { rowCount } = await pool.query('delete from learned_rules where id = $1', [req.params.id]);
     if (!rowCount) throw notFound();
     return { deleted: true };
+  });
+
+  /** Aplica as regras aos lançamentos antigos sem categoria. Com dry_run, só conta e mostra exemplos. */
+  app.post('/rules/apply', async (req) => {
+    const b = z.object({ dry_run: z.boolean().optional() }).parse(req.body ?? {});
+    return applyRulesToUncategorized(pool, { dry_run: b.dry_run ?? true });
   });
 
   /** Esquecer tudo o que foi aprendido. */

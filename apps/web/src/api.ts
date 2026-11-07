@@ -170,12 +170,18 @@ export interface PreviewRow {
   duplicate: null | { level: 'exact' | 'possible'; id: number; description: string; date: string | null; status: string };
   learned?: { id: number; uses: number } | null;
   ai?: boolean;
+  similar?: { pattern: string } | null;
   // preenchidos na tela
   transfer_account_id?: number | null; card_id?: number | null;
   installment?: { no: number; total: number; bare: boolean } | null;
 }
 export interface AiSettings { enabled: boolean; available: boolean; month: string; calls: number; limit: number; model: string }
 export interface AppSettings { own_transfer_names: string[]; ai: AiSettings }
+
+export interface ApplyResult {
+  dry_run: boolean; total_uncategorized: number; matched: number; updated: number;
+  sample: { id: number; description: string; category_name: string; via: 'exact' | 'similar'; pattern: string }[];
+}
 
 export interface LearnedRule {
   id: number; kind: 'account' | 'card'; pattern: string; category_id: number | null; category_name: string | null;

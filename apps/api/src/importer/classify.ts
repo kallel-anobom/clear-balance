@@ -15,6 +15,16 @@ export interface Suggestion {
   category_id?: number | null;
   /** Regra aprendida que gerou esta sugestão. */
   learned?: { id: number; uses: number } | null;
+  /** Categoria sugerida por semelhança com estabelecimentos que você já classificou (nunca vale como regra exata). */
+  similar?: SimilarMatch | null;
+}
+
+export interface SimilarMatch {
+  rule_id: number;
+  /** O que foi parecido: o nome da regra ou a palavra em comum. */
+  pattern: string;
+  category_id: number;
+  score: number;
 }
 
 /** Regra aprendida com as correções do usuário: só nome do estabelecimento e classificação, nunca valores. */
@@ -43,6 +53,78 @@ export function merchantKey(description: string): string {
     .filter((t) => t.length >= 2 && !/\d/.test(t) && !NOISE_TOKENS.has(t));
   const key = tokens.slice(0, 3).join(' ');
   return key.length >= 3 ? key.slice(0, 60) : '';
+}
+
+/** Palavras que aparecem em muitos nomes e não identificam um estabelecimento. */
+const GENERIC_TOKENS = new Set(['loja', 'lojas', 'ltda', 'eireli', 'epp', 'com', 'comercio', 'comercial', 'servicos', 'servico', 'center', 'centro', 'grupo', 'casa', 'nova', 'novo', 'sao', 'santa', 'santo']);
+const SIMILAR_MIN_SCORE = 0.6;
+
+function editDistance(a: string, b: string): number {
+  const dp = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array<number>(b.length).fill(0)]);
+  for (let j = 1; j <= b.length; j++) dp[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+  }
+  return dp[a.length][b.length];
+}
+
+/** Mesma palavra, ou uma letra de diferença (erro de digitação) em palavras longas. */
+function sameToken(a: string, b: string): boolean {
+  return a === b || (a.length >= 5 && b.length >= 5 && editDistance(a, b) <= 1);
+}
+
+const significant = (key: string, minLen = 2) => key.split(' ').filter((t) => t.length >= minLen && !GENERIC_TOKENS.has(t));
+
+/**
+ * Procura, entre as regras que você já ensinou, estabelecimentos PARECIDOS com este (nome nunca visto).
+ * Dois critérios, ambos conservadores (abaixo disso, não sugere nada):
+ *  1. Forte: as palavras do nome coincidem com as de UMA regra (cobertura >= 0,6 da menor lista de palavras, e
+ *     pelo menos 2 palavras em comum ou o nome inteiro da regra contido no novo nome).
+ *  2. Palavra de categoria: a mesma palavra aparece em 2+ regras e TODAS têm a mesma categoria (ex.: "padaria").
+ */
+export function findSimilar(description: string, kind: TargetKind, rules: LearnedRule[] | undefined): SimilarMatch | null {
+  if (!rules?.length) return null;
+  const key = merchantKey(description);
+  const toks = significant(key);
+  if (!toks.length) return null;
+  const pool = rules.filter((r) => r.kind === kind && r.category_id !== null && r.pattern !== key);
+
+  let best: (SimilarMatch & { uses: number }) | null = null;
+  for (const r of pool) {
+    const ptoks = significant(r.pattern);
+    if (!ptoks.length) continue;
+    const free = [...ptoks];
+    let matched = 0;
+    for (const t of toks) {
+      const i = free.findIndex((p) => sameToken(t, p));
+      if (i >= 0) { matched++; free.splice(i, 1); }
+    }
+    const score = matched / Math.min(toks.length, ptoks.length);
+    // Com uma só palavra em comum, o nome inteiro da regra precisa estar no novo nome (ex.: regra "starbucks").
+    if (matched >= 1 && (matched >= 2 || matched === ptoks.length) && score >= SIMILAR_MIN_SCORE && (!best || score > best.score || (score === best.score && r.use_count > best.uses))) {
+      best = { rule_id: r.id, pattern: r.pattern, category_id: r.category_id!, score: Math.round(score * 100) / 100, uses: r.use_count };
+    }
+  }
+  if (best) { const { uses: _u, ...m } = best; return m; }
+
+  for (const t of toks.filter((x) => x.length >= 4)) {
+    const withToken = pool.filter((r) => significant(r.pattern, 4).some((p) => sameToken(t, p)));
+    if (withToken.length >= 2 && new Set(withToken.map((r) => r.category_id)).size === 1) {
+      return { rule_id: withToken[0].id, pattern: t, category_id: withToken[0].category_id!, score: SIMILAR_MIN_SCORE };
+    }
+  }
+  return null;
+}
+
+/** Categoria vinda só das regras (exata ou parecida), para reclassificar lançamentos antigos sem categoria. */
+export function categoryFromRules(description: string, kind: TargetKind, rules: LearnedRule[]): { category_id: number; via: 'exact' | 'similar'; pattern: string } | null {
+  const exact = matchRule(description, kind, rules);
+  if (exact?.category_id) return { category_id: exact.category_id, via: 'exact', pattern: exact.pattern };
+  if (exact) return null;
+  const sim = findSimilar(description, kind, rules);
+  return sim ? { category_id: sim.category_id, via: 'similar', pattern: sim.pattern } : null;
 }
 
 function matchRule(description: string, kind: TargetKind, rules: LearnedRule[] | undefined): LearnedRule | null {
@@ -97,7 +179,7 @@ interface SuggestOpts {
 export function suggest(opts: SuggestOpts): Suggestion {
   const base = keywordSuggest(opts);
   const rule = matchRule(opts.description, opts.kind, opts.rules);
-  if (!rule) return base;
+  if (!rule) return { ...base, similar: findSimilar(opts.description, opts.kind, opts.rules) };
   const type = rule.type && typeFits(rule.type, opts.kind, opts.direction) ? rule.type : base.type;
   const hasCategory = ['expense', 'income'].includes(type);
   return {

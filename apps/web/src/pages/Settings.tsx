@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
-import { api, type Account, type AppSettings, type LearnedRule, type Recurring, type TxType } from '../api';
+import { api, type Account, type ApplyResult, type AppSettings, type LearnedRule, type Recurring, type TxType } from '../api';
 import { Badge, Empty, ErrorBox, Field, Loading, Modal, MoneyField, Panel } from '../components';
 import { brl, dateBR, monthShort, todayISO } from '../format';
 import { useLookups, useRefresh } from '../hooks';
@@ -150,12 +150,31 @@ function RulesPanel() {
   });
   const del = useMutation({ mutationFn: (id: number) => api.del(`/rules/${id}`), onSuccess: refresh });
   const clear = useMutation({ mutationFn: () => api.del('/rules'), onSuccess: refresh });
+  // Aplica as regras aos lançamentos antigos sem categoria (primeiro só conta, depois pede confirmação).
+  const [applied, setApplied] = useState<string | null>(null);
+  const apply = useMutation({
+    mutationFn: async () => {
+      const dry = await api.post<ApplyResult>('/rules/apply', { dry_run: true });
+      if (dry.matched === 0) return `Nenhum dos ${dry.total_uncategorized} lançamentos sem categoria combina com as regras.`;
+      const ex = dry.sample.slice(0, 5).map((s) => `• ${s.description} → ${s.category_name}${s.via === 'similar' ? ' (parecido)' : ''}`).join('\n');
+      if (!confirm(`${dry.matched} de ${dry.total_uncategorized} lançamentos sem categoria serão classificados:\n\n${ex}\n\nLançamentos que já têm categoria não são alterados. Continuar?`)) return 'Cancelado. Nada foi alterado.';
+      const done = await api.post<ApplyResult>('/rules/apply', { dry_run: false });
+      return `${done.updated} lançamento(s) classificado(s).`;
+    },
+    onSuccess: (msg) => { setApplied(msg); refresh(); },
+  });
   const list = rules.data ?? [];
   return (
     <Panel title="Regras aprendidas" action={list.length > 0 ? <button className="btn small danger" disabled={clear.isPending} onClick={() => confirm('Esquecer todas as regras aprendidas?') && clear.mutate()}>Esquecer tudo</button> : undefined}>
       <p className="muted small">
         Quando você corrige o tipo ou a categoria de uma linha na importação e marca “lembrar esta correção”, o sistema guarda <strong>apenas o nome do estabelecimento</strong> (sem números, datas ou valores) e a classificação escolhida, e a sugere nas próximas importações. Tudo fica na sua própria base: nada é enviado a serviços externos.
       </p>
+      {list.length > 0 && (
+        <div className="inline-form">
+          <button className="btn" disabled={apply.isPending} onClick={() => apply.mutate()}>{apply.isPending ? 'Conferindo…' : 'Aplicar aos lançamentos antigos sem categoria'}</button>
+          {applied && <span className="muted small">{applied}</span>}
+        </div>
+      )}
       {rules.isLoading ? <Loading /> : list.length === 0 ? <Empty>Nada aprendido ainda. Corrija uma categoria ao importar um extrato.</Empty> : (
         <ul className="rows">{list.map((r) => (
           <li className="row" key={r.id}>
@@ -185,7 +204,7 @@ function RulesPanel() {
             </div>
           </li>))}</ul>
       )}
-      <ErrorBox error={patch.error ?? del.error ?? clear.error} />
+      <ErrorBox error={patch.error ?? del.error ?? clear.error ?? apply.error} />
     </Panel>
   );
 }

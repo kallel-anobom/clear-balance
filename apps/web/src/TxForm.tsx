@@ -38,10 +38,15 @@ const blank = (month: string): FormState => ({
   inst_no: '', inst_total: '', apply_following: false,
 });
 
+const isCategorized = (type: string) => type === 'expense' || type === 'income';
+
 export function TxForm({ tx, preset, month, onClose, title }: { tx?: Tx; preset?: TxPreset; month: string; onClose: () => void; title?: string }) {
   const { accounts, cards, categories } = useLookups();
   const refresh = useRefresh();
   const [f, setF] = useState<FormState>(() => (tx ? fromTx(tx) : { ...blank(month), ...preset }));
+  // Ao trocar a categoria de um lançamento existente, o sistema pode aprender (só nome do estabelecimento e categoria).
+  const [remember, setRemember] = useState(true);
+  const categoryChanged = !!tx && (isCategorized(tx.type)) && f.category_id !== null && f.category_id !== tx.category_id;
   const set = <K extends keyof FormState>(k: K, v: FormState[K]) => setF((s) => ({ ...s, [k]: v }));
 
   const isExpense = f.type === 'expense';
@@ -109,7 +114,10 @@ export function TxForm({ tx, preset, month, onClose, title }: { tx?: Tx; preset?
         p.installment_total = total_n;
         p.installment_no = no;
       }
-      if (tx) return api.patch(`/transactions/${tx.id}${f.apply_following && tx.installment_group ? '?scope=following' : ''}`, p);
+      if (tx) {
+        if (categoryChanged && remember) p.remember = true;
+        return api.patch(`/transactions/${tx.id}${f.apply_following && tx.installment_group ? '?scope=following' : ''}`, p);
+      }
       return api.post('/transactions', p);
     },
     onSuccess: () => { refresh(); onClose(); },
@@ -151,6 +159,11 @@ export function TxForm({ tx, preset, month, onClose, title }: { tx?: Tx; preset?
               <option value="">Sem categoria</option>
               {categories.filter((c) => c.kind === (isIncome ? 'income' : 'expense')).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
+            {categoryChanged && (
+              <label className="check small" title="Guarda só o nome do estabelecimento e a categoria (sem valores nem datas).">
+                <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} /> lembrar para este estabelecimento
+              </label>
+            )}
           </Field>
         )}
 
