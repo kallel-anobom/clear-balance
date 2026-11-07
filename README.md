@@ -106,6 +106,9 @@ Quando você corrige o tipo ou a categoria de uma linha e deixa marcado **“lem
 
 - **O que é guardado:** só o nome normalizado do estabelecimento (sem acentos, números, códigos, parcelas; até 3 palavras), a categoria, o tipo e quantas vezes foi confirmada. **Nunca** valores, datas ou o texto do extrato.
 - **Prioridade:** regra aprendida > categoria do histórico > palavras-chave. A regra é separada por conta e por cartão e só vale se fizer sentido (cartão só tem compras; uma entrada não vira pagamento de fatura).
+- **Nomes parecidos:** quando o nome é novo, mas parecido com o que você já classificou, o sistema sugere a categoria e marca a linha com *parecido com “…”* (sempre para conferir). Critérios conservadores: o nome precisa coincidir em pelo menos 2 palavras com uma regra (ou conter o nome inteiro dela), ou a mesma palavra (ex.: “confeitaria”) precisa aparecer em 2 ou mais regras **da mesma categoria**. Erros de digitação de uma letra são tolerados; palavras genéricas (“loja”, “ltda”…) não contam; se a palavra aparece em categorias diferentes, não sugere nada. Prioridade final: regra exata > histórico idêntico > parecido > palavras-chave > IA.
+- **Aprende também em Lançamentos:** ao trocar a categoria de um lançamento, aparece *lembrar para este estabelecimento* (marcado). Sem marcar, nada é aprendido.
+- **Aplicar aos antigos:** em *Configurações → Regras aprendidas*, o botão *Aplicar aos lançamentos antigos sem categoria* mostra quantos seriam classificados e pede confirmação. Lançamentos que já têm categoria nunca são alterados.
 - **Controle:** em *Configurações → Regras aprendidas* você edita categoria/tipo, marca *ignorar sempre*, esquece uma regra ou todas. *Apagar todos os dados* também apaga as regras.
 
 
