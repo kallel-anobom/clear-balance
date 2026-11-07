@@ -34,6 +34,11 @@ export interface TxRow {
   is_estimate: boolean;
   needs_review: boolean;
   review_note: string | null;
+  /** Presentes nas linhas vindas do banco; opcionais para facilitar testes. */
+  recurring_id?: number | null;
+  installment_no?: number | null;
+  installment_total?: number | null;
+  is_projected?: boolean;
 }
 
 export interface InvoiceRow {
@@ -106,6 +111,23 @@ export const OVERDRAFT_COST_SLUG = 'juros-tarifas';
 const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
 const myShare = (t: TxRow) => t.my_share_cents ?? t.total_cents;
 
+/** De onde vem cada despesa do mês (grupos que não se sobrepõem: a soma dos grupos é o custo total). */
+export type SpendOrigin = 'installment' | 'card' | 'recurring' | 'account';
+
+export const SPEND_ORIGINS: { key: SpendOrigin; label: string; hint: string }[] = [
+  { key: 'card', label: 'Compras no cartão', hint: 'Contam na data da compra, não no pagamento da fatura.' },
+  { key: 'installment', label: 'Parcelas de compras parceladas', hint: 'Inclui parcelas já lançadas e as previstas para este mês.' },
+  { key: 'recurring', label: 'Contas fixas (recorrentes)', hint: 'Aluguel, condomínio, assinaturas e outras contas que se repetem todo mês.' },
+  { key: 'account', label: 'Outros gastos da conta', hint: 'Débito, PIX e boletos pagos direto da conta.' },
+];
+
+export function spendOrigin(t: TxRow): SpendOrigin {
+  if (t.installment_no != null && t.card_id !== null) return 'installment';
+  if (t.card_id !== null) return 'card';
+  if (t.recurring_id != null) return 'recurring';
+  return 'account';
+}
+
 export function cashDate(t: TxRow): string | null {
   return t.paid_on ?? t.due_date ?? t.occurred_on ?? null;
 }
@@ -150,6 +172,24 @@ export function computeOverview(input: OverviewInput) {
     by_category: [...catMap.values()].sort(
       (a, b) => b.realized_cents + b.planned_cents - (a.realized_cents + a.planned_cents),
     ),
+    // CUSTO TOTAL DO MÊS = tudo que gastei (minha parte), já pago ou ainda previsto.
+    total_mine_cents: sum(expenses.map(myShare)),
+    estimated_count: expenses.filter((t) => t.is_estimate || t.is_projected).length,
+    breakdown: SPEND_ORIGINS.map((o) => {
+      const items = expenses.filter((t) => spendOrigin(t) === o.key);
+      const paid = sum(items.filter((t) => t.status === 'paid').map(myShare));
+      const planned = sum(items.filter((t) => t.status === 'scheduled').map(myShare));
+      return {
+        key: o.key,
+        label: o.label,
+        hint: o.hint,
+        count: items.length,
+        paid_cents: paid,
+        planned_cents: planned,
+        total_cents: paid + planned,
+        projected_count: items.filter((t) => t.is_projected).length,
+      };
+    }).filter((b) => b.count > 0),
   };
 
   // ---------- 2. Receitas do mês (caixa) ----------
@@ -208,6 +248,51 @@ export function computeOverview(input: OverviewInput) {
   outflows.sort(byDate);
   const pendingOutflows = outflows.filter((o) => o.status === 'pending');
   const paidOutflows = outflows.filter((o) => o.status === 'paid');
+
+  // ---------- 3b. O que NÃO entra no custo do mês (e por quê) ----------
+  const excluded: { code: string; label: string; count: number; amount_cents: number; reason: string }[] = [];
+  const exclude = (code: string, label: string, count: number, amount: number, reason: string) =>
+    count > 0 && excluded.push({ code, label, count, amount_cents: amount, reason });
+  const faturas = outflows.filter((o) => o.kind === 'fatura');
+  exclude(
+    'invoice_payment',
+    'Pagamento de fatura do cartão',
+    faturas.length,
+    sum(faturas.map((o) => o.amount_cents)),
+    'Já foi contado nas compras do cartão, na data de cada compra. Contar de novo seria duplicar.',
+  );
+  const transfers = txs.filter((t) => t.type === 'transfer' && (t.month_ref === month || cashMonth(t) === month));
+  exclude(
+    'transfer',
+    'Transferências entre minhas contas',
+    transfers.length,
+    sum(transfers.map((t) => t.total_cents)),
+    'O dinheiro só mudou de conta; não é gasto nem receita.',
+  );
+  const amort = outflows.filter((o) => o.kind === 'cheque_especial');
+  exclude(
+    'overdraft_payment',
+    'Pagamento de cheque especial',
+    amort.length,
+    sum(amort.map((o) => o.amount_cents)),
+    'Pagar a dívida não é gasto novo. Só juros e tarifas contam (e já estão no custo).',
+  );
+  const sharedOthers = expenses.filter((t) => t.total_cents > myShare(t));
+  exclude(
+    'shared_others',
+    'Parte de outras pessoas em despesas divididas',
+    sharedOthers.length,
+    sum(sharedOthers.map((t) => t.total_cents - myShare(t))),
+    'Você pagou, mas é de outra pessoa. Só a sua parte entra no custo.',
+  );
+  const reimbs = txs.filter((t) => t.type === 'reimbursement' && cashMonth(t) === month);
+  exclude(
+    'reimbursement',
+    'Reembolsos recebidos',
+    reimbs.length,
+    sum(reimbs.map((t) => t.total_cents)),
+    'Não reduz o custo (o custo já considera só a sua parte) e não é receita.',
+  );
 
   // ---------- 4. Reembolsos ----------
   const pendingOf = (r: ReimbursementItem) => Math.max(0, r.others_cents - r.received_cents);
@@ -314,7 +399,7 @@ export function computeOverview(input: OverviewInput) {
   return {
     month,
     today,
-    spending,
+    spending: { ...spending, excluded },
     income,
     cash: {
       paid_cents: sum(paidOutflows.map((o) => o.amount_cents)),

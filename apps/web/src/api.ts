@@ -97,6 +97,10 @@ export interface Overview {
   spending: {
     realized_mine_cents: number; realized_total_cents: number; planned_mine_cents: number; planned_total_cents: number;
     planned_estimated_count: number; by_category: { name: string; realized_cents: number; planned_cents: number }[];
+    /** Custo total do mês (competência, minha parte): já pago + ainda previsto. */
+    total_mine_cents: number; estimated_count: number;
+    breakdown: { key: string; label: string; hint: string; count: number; paid_cents: number; planned_cents: number; total_cents: number; projected_count: number }[];
+    excluded: { code: string; label: string; count: number; amount_cents: number; reason: string }[];
   };
   income: {
     received_net_cents: number; scheduled_net_cents: number; gross_cents: number; deductions_cents: number; net_cents: number;
