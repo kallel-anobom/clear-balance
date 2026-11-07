@@ -109,11 +109,23 @@ Quando você corrige o tipo ou a categoria de uma linha e deixa marcado **“lem
 - **Controle:** em *Configurações → Regras aprendidas* você edita categoria/tipo, marca *ignorar sempre*, esquece uma regra ou todas. *Apagar todos os dados* também apaga as regras.
 
 
+### IA opcional (leitor de reserva)
+
+Quando o leitor automático não entende um extrato, o botão **Tentar com IA** (na revisão da importação) pede ajuda ao Claude, da Anthropic. É **opcional, desligado por padrão** e só funciona se você ligar em *Configurações → IA (opcional)* e configurar a chave no servidor.
+
+- **O que é enviado:** apenas o **texto** lido do extrato, nunca o arquivo. Antes, o servidor troca CPF/CNPJ, e-mails, telefones, números de cartão, agência/conta e sequências longas de dígitos por marcadores (`[CPF]`, `[TEL]`...). Valores, datas e **nomes de estabelecimentos continuam no texto**, e nomes de pessoas (ex.: PIX para “Fulano”) também, porque não dá para detectá-los com segurança. Se isso for um problema para um extrato específico, não use a IA nele.
+- **A IA só propõe:** as linhas chegam **desmarcadas**, com a marca *IA: conferir*, e você revisa tudo antes de salvar. Nada é gravado pela IA.
+- **Conferência de valores:** o servidor confere se cada valor devolvido existe no texto enviado (valor inexistente fica marcado) e **descarta a resposta inteira** se a maioria dos valores for inventada. Em faturas, também compara a soma com o total lido.
+- **Limites:** teto de chamadas por mês (`AI_MONTHLY_LIMIT`, padrão 60), texto máximo de ~60 mil caracteres e tempo máximo de 25 s. Defina também um **limite de gasto mensal** no console da Anthropic. Um extrato de ~100 linhas custa centavos com um modelo pequeno.
+- **Como ligar (produção):** crie a chave no console da Anthropic (com limite de gasto), adicione `ANTHROPIC_API_KEY` em *Vercel → Settings → Environment Variables* (opcionalmente `ANTHROPIC_MODEL` e `AI_MONTHLY_LIMIT`) e faça redeploy. Nunca coloque a chave no repositório ou no front-end. Localmente, use o `.env`.
+- **Testes e CI** nunca chamam a API real (a chamada é simulada). Não há migração de banco: o interruptor e o contador ficam na tabela `settings`.
+
 ## Privacidade e dados
 
-- **Local:** dados somente no PostgreSQL do seu computador (volume Docker `clear_balance_pgdata`), que só escuta em `127.0.0.1`. **Hospedado:** dados no **seu** projeto Supabase, acessíveis só depois do login e da checagem do seu e-mail na API; nenhum outro serviço recebe seus dados (o OCR roda no navegador).
+- **Local:** dados somente no PostgreSQL do seu computador (volume Docker `clear_balance_pgdata`), que só escuta em `127.0.0.1`. **Hospedado:** dados no **seu** projeto Supabase, acessíveis só depois do login e da checagem do seu e-mail na API; nenhum outro serviço recebe seus dados (o OCR roda no navegador), exceto se você ligar a IA opcional.
 - **Não são armazenados:** senhas bancárias, tokens, CVV, número completo de cartão (apenas os 4 últimos dígitos, se informados) nem os arquivos importados — só os lançamentos aprovados na revisão.
 - A API não registra corpo de requisições nem conteúdo de extratos/PDFs em logs (nível `warn`, erros sem detalhes do banco).
+- **IA opcional:** desligada por padrão; se ligada, só o texto anonimizado do extrato vai à Anthropic, a seu pedido (veja *IA opcional*).
 - **Regras aprendidas** guardam apenas nome de estabelecimento e classificação (veja *Aprendizado local*).
 - **Apagar:** *Importação → Apagar importação*, *Configurações → Apagar tudo que foi importado* e *Apagar todos os dados* (exige digitar `APAGAR TUDO`).
 
