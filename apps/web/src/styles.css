@@ -220,3 +220,5 @@ input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px s
 .paste-box textarea, .read-text textarea { width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85rem; }
 .read-text { margin: 0.75rem 0; }
 .read-text summary { cursor: pointer; margin-bottom: 0.5rem; }
+
+.rule-controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; justify-content: flex-end; }

@@ -7,7 +7,7 @@ import { TYPE_LABEL, brl, dateBR, todayISO } from '../format';
 import { useLookups, useRefresh } from '../hooks';
 import { extractFromFiles, isImageFile, isPdfFile, type Progress } from '../ocr';
 
-type Row = PreviewRow & { manual?: boolean };
+type Row = PreviewRow & { manual?: boolean; orig?: { type: TxType; category_id: number | null }; forget?: boolean };
 interface ImportBatch { id: number; label: string; source_kind: string; created_at: string; transactions: number }
 
 const ACTIONS = { create: 'Importar', skip: 'Ignorar', link: 'Vincular ao já cadastrado' } as const;
@@ -65,7 +65,7 @@ export default function ImportPage({ month }: { month: string }) {
 
   const applyPreview = (p: PreviewResponse) => {
     setPreview(p);
-    setRows(p.rows);
+    setRows(p.rows.map((r) => ({ ...r, orig: { type: r.type, category_id: r.category_id } })));
     setResult(null);
     setInvoiceDue(p.pdf?.detected_due_date ?? '');
     setStatementTotal(null);
@@ -127,7 +127,7 @@ export default function ImportPage({ month }: { month: string }) {
         statement_total_cents: isCard && invoiceDue ? statementTotal : null,
         rows: chosen.map((r) => ({
           date: r.date, description: r.description, abs_cents: r.abs_cents, direction: r.direction, type: isCard ? 'expense' : r.type,
-          category_id: r.category_id, needs_review: r.needs_review, action: r.action,
+          category_id: r.category_id, needs_review: r.needs_review, action: r.action, remember: corrected(r) && !r.forget,
           link_to_id: r.action === 'link' ? r.duplicate?.id ?? null : null, hash: r.hash,
           transfer_account_id: r.transfer_account_id ?? null, card_id: r.card_id ?? null,
         })),
@@ -142,6 +142,11 @@ export default function ImportPage({ month }: { month: string }) {
   });
 
   const del = useMutation({ mutationFn: (id: number) => api.del(`/data/imports/${id}`), onSuccess: refresh });
+
+  // Correção do usuário em relação à sugestão: é isso que o sistema pode aprender (só nome do estabelecimento, tipo e categoria).
+  const corrected = (r: Row) =>
+    r.action !== 'skip' && (r.type === 'expense' || r.type === 'income' || !isCard) &&
+    (r.orig ? (!isCard && r.type !== r.orig.type) || r.category_id !== r.orig.category_id : r.category_id !== null);
 
   const update = (idx: number, patch: Partial<Row>) => setRows((rs) => rs.map((r) => (r.idx === idx ? { ...r, ...patch } : r)));
   const chosen = rows.filter((r) => r.action !== 'skip');
@@ -330,8 +335,14 @@ export default function ImportPage({ month }: { month: string }) {
                     </select>
                   )}
                   <label className="check"><input type="checkbox" checked={r.needs_review} onChange={(e) => update(r.idx, { needs_review: e.target.checked })} /> revisar depois</label>
+                  {corrected(r) && (
+                    <label className="check" title="Guarda só o nome do estabelecimento e a classificação (sem valores nem datas).">
+                      <input type="checkbox" checked={!r.forget} onChange={(e) => update(r.idx, { forget: !e.target.checked })} /> lembrar esta correção
+                    </label>
+                  )}
                 </div>
                 <div className="import-notes">
+                  {r.learned && <Badge tone="info" title="Classificação lembrada de correções anteriores. Gerencie em Configurações › Regras aprendidas.">aprendida ({r.learned.uses}×)</Badge>}
                   {r.installment && <Badge tone="info" title="Compra parcelada">parcela {r.installment.no}/{r.installment.total}</Badge>}
                   {r.uncertain_reason && <Badge tone="warn">conferir: {r.uncertain_reason}</Badge>}
                   {r.duplicate?.level === 'exact' && <Badge tone="bad">duplicata exata</Badge>}

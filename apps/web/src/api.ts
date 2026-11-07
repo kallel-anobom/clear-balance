@@ -166,9 +166,14 @@ export interface PreviewRow {
   type: TxType; category_id: number | null; needs_review: boolean; note: string | null; uncertain_reason: string | null;
   action: 'create' | 'skip' | 'link'; hash: string | null;
   duplicate: null | { level: 'exact' | 'possible'; id: number; description: string; date: string | null; status: string };
+  learned?: { id: number; uses: number } | null;
   // preenchidos na tela
   transfer_account_id?: number | null; card_id?: number | null;
   installment?: { no: number; total: number; bare: boolean } | null;
+}
+export interface LearnedRule {
+  id: number; kind: 'account' | 'card'; pattern: string; category_id: number | null; category_name: string | null;
+  type: TxType | null; ignore: boolean; use_count: number; created_at: string; last_used_at: string;
 }
 export interface PreviewResponse {
   source_kind: 'csv' | 'pdf' | 'image';
