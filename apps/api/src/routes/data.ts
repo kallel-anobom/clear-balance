@@ -15,7 +15,8 @@ export async function dataRoutes(app: FastifyInstance) {
         (select count(*) from invoices)::int as invoices,
         (select count(*) from accounts)::int as accounts,
         (select count(*) from cards)::int as cards,
-        (select count(*) from learned_rules)::int as learned_rules`);
+        (select count(*) from learned_rules)::int as learned_rules,
+        (select count(*) from budgets)::int as budgets`);
     return rows[0];
   });
 
@@ -61,7 +62,7 @@ export async function dataRoutes(app: FastifyInstance) {
       return { error: 'Confirmação ausente: envie confirm = "APAGAR TUDO".' };
     }
     await withTx(async (c) => {
-      await c.query(`truncate transactions, invoices, import_batches, recurring_skips, recurring_items, cards, accounts, learned_rules restart identity cascade`);
+      await c.query(`truncate transactions, invoices, import_batches, recurring_skips, recurring_items, cards, accounts, learned_rules, budgets restart identity cascade`);
       await c.query(`delete from settings where key = 'seeded'`);
     });
     return { wiped: true };
