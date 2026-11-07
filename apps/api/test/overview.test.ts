@@ -150,3 +150,57 @@ describe('previsão de saldo', () => {
     expect(o.upcoming[1].date_confirmed).toBe(false);
   });
 });
+
+describe('custo total do mês', () => {
+  const mixed = () => [
+    // compra no cartão (já ocorrida) e parcela real + parcela prevista no cartão
+    tx({ card_id: 1, account_id: null, paid_on: null, status: 'paid', occurred_on: '2026-11-02', total_cents: 30000, invoice_id: 7 }),
+    tx({ card_id: 1, account_id: null, paid_on: null, status: 'paid', occurred_on: '2026-11-03', total_cents: 12000, invoice_id: 7, installment_no: 2, installment_total: 5 }),
+    tx({ card_id: 1, account_id: null, paid_on: null, status: 'scheduled', occurred_on: '2026-11-12', total_cents: 8000, invoice_id: 7, installment_no: 3, installment_total: 5, is_projected: true, is_estimate: true }),
+    // conta fixa prevista e gasto avulso pago
+    tx({ status: 'scheduled', paid_on: null, due_date: '2026-11-15', total_cents: 180000, recurring_id: 9, description: 'Aluguel' }),
+    tx({ total_cents: 4500 }),
+    // despesa dividida: só a minha parte entra
+    tx({ total_cents: 20000, my_share_cents: 12000, shared_with: 'Ana' } as Partial<TxRow>),
+    // não são custo
+    tx({ type: 'invoice_payment', total_cents: 90000, card_id: 1, invoice_id: 6 }),
+    tx({ type: 'transfer', total_cents: 50000 }),
+    tx({ type: 'overdraft_payment', total_cents: 10000 }),
+    tx({ type: 'reimbursement', total_cents: 8000 }),
+  ];
+
+  it('soma realizado + previsto (minha parte) e ignora fatura paga, transferência, cheque especial e reembolso', () => {
+    const o = run(mixed());
+    expect(o.spending.total_mine_cents).toBe(30000 + 12000 + 8000 + 180000 + 4500 + 12000);
+    expect(o.spending.total_mine_cents).toBe(o.spending.realized_mine_cents + o.spending.planned_mine_cents);
+  });
+
+  it('o detalhamento por origem fecha exatamente com o total e marca o que é estimado/previsto', () => {
+    const o = run(mixed());
+    const by = Object.fromEntries(o.spending.breakdown.map((b) => [b.key, b]));
+    expect(by.card).toMatchObject({ count: 1, total_cents: 30000 });
+    expect(by.installment).toMatchObject({ count: 2, paid_cents: 12000, planned_cents: 8000, projected_count: 1 });
+    expect(by.recurring).toMatchObject({ count: 1, planned_cents: 180000 });
+    expect(by.account).toMatchObject({ count: 2, total_cents: 4500 + 12000 });
+    expect(o.spending.breakdown.reduce((a, b) => a + b.total_cents, 0)).toBe(o.spending.total_mine_cents);
+    expect(o.spending.estimated_count).toBe(1);
+  });
+
+  it('lista o que ficou de fora, com motivo, sem duplicar o custo', () => {
+    const o = run(mixed());
+    const ex = Object.fromEntries(o.spending.excluded.map((e) => [e.code, e]));
+    expect(ex.invoice_payment).toMatchObject({ count: 1, amount_cents: 90000 });
+    expect(ex.transfer).toMatchObject({ count: 1, amount_cents: 50000 });
+    expect(ex.overdraft_payment).toMatchObject({ count: 1, amount_cents: 10000 });
+    expect(ex.shared_others).toMatchObject({ count: 1, amount_cents: 8000 });
+    expect(ex.reimbursement).toMatchObject({ count: 1, amount_cents: 8000 });
+    expect(Object.values(ex).every((e) => e.reason.length > 10)).toBe(true);
+  });
+
+  it('mês sem despesas: custo zero e listas vazias', () => {
+    const o = run([]);
+    expect(o.spending.total_mine_cents).toBe(0);
+    expect(o.spending.breakdown).toEqual([]);
+    expect(o.spending.excluded).toEqual([]);
+  });
+});

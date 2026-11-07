@@ -1,4 +1,5 @@
-import { parseDate, parseMoney } from '../lib.js';
+import { parseDate, parseMoney, todayISO } from '../lib.js';
+import { parseLayoutLines } from './layout.js';
 import type { ParsedRow, TargetKind } from './types.js';
 
 export class PdfError extends Error {
@@ -41,6 +42,8 @@ export interface PdfParseResult {
   detected_total_cents: number | null;
   reconciliation_cents: number | null;
   warnings: string[];
+  /** Números sobre o texto lido (nunca o texto), para explicar na tela por que algo não foi reconhecido. */
+  stats: { lines: number; lines_with_money: number; date_headers: number; reader: 'classic' | 'app' };
 }
 
 /** Correções leves e seguras para erros comuns de OCR (espaços perdidos/sobrando em valores e datas). */
@@ -74,11 +77,11 @@ const DUE_RE = /vencimento\D{0,25}(\d{2}\/\d{2}\/\d{4})/i;
  */
 export function parseStatementText(
   text: string,
-  opts: { kind: TargetKind; refMonth: string; ocr?: boolean },
+  opts: { kind: TargetKind; refMonth: string; ocr?: boolean; today?: string },
 ): PdfParseResult {
   const [refYear, refMon] = opts.refMonth.split('-').map(Number);
   const lines = (opts.ocr ? cleanOcrText(text) : text).split(/\r?\n/).map((l) => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
-  const rows: ParsedRow[] = [];
+  let rows: ParsedRow[] = [];
   let candidates = 0;
   let detectedTotal: number | null = null;
   let detectedDue: string | null = null;
@@ -147,13 +150,32 @@ export function parseStatementText(
   const warnings: string[] = [];
   let confidence: PdfConfidence = 'ok';
   let reconciliation: number | null = null;
+
+  // Formato de app de banco (data como título do grupo, valor em outra linha): tenta o leitor flexível
+  // quando o leitor clássico não entendeu o documento.
+  let layoutUsed = false;
+  let dateHeaders = 0;
+  if (rows.length === 0 || (candidates > 0 && rows.length < candidates * 0.8)) {
+    const lay = parseLayoutLines(lines, { kind: opts.kind, refMonth: opts.refMonth, today: opts.today ?? todayISO() });
+    if (lay.rows.length > rows.length) {
+      rows = lay.rows;
+      layoutUsed = true;
+      dateHeaders = lay.dateHeaders;
+      yearless = yearless || lay.yearless;
+      warnings.push(
+        `Formato de app reconhecido (${lay.dateHeaders} data${lay.dateHeaders === 1 ? '' : 's'} como título de grupo). Compare cada linha com a imagem.`,
+      );
+      if (lay.relativeDates) warnings.push('Há datas como "Hoje" ou "Ontem": foram convertidas pela data de hoje. Confira.');
+      if (rows.some((r) => r.date === null)) warnings.push('Algumas linhas ficaram sem data. Informe a data antes de importar.');
+    }
+  }
   if (rows.length === 0) {
     confidence = 'none';
     warnings.push(
       'Não foi possível identificar lançamentos neste PDF com segurança. Use o CSV do banco (se houver) ou inclua os lançamentos manualmente.',
     );
   } else {
-    if (rows.length < candidates * 0.8) {
+    if (!layoutUsed && rows.length < candidates * 0.8) {
       confidence = 'low';
       warnings.push(`Só ${rows.length} de ${candidates} linhas com data foram interpretadas.`);
     }
@@ -166,6 +188,7 @@ export function parseStatementText(
       }
     }
   }
+  if (layoutUsed) confidence = 'low';
   if (opts.ocr && rows.length) {
     // Texto de imagem nunca é tratado como confiável: o usuário confere linha a linha.
     confidence = 'low';
@@ -183,5 +206,11 @@ export function parseStatementText(
     detected_total_cents: detectedTotal,
     reconciliation_cents: reconciliation,
     warnings,
+    stats: {
+      lines: lines.length,
+      lines_with_money: lines.filter((l) => l.match(MONEY_TOKEN) !== null).length,
+      date_headers: dateHeaders,
+      reader: layoutUsed ? 'app' : 'classic',
+    },
   };
 }

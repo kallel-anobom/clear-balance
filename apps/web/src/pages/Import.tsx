@@ -7,7 +7,7 @@ import { TYPE_LABEL, brl, dateBR, todayISO } from '../format';
 import { useLookups, useRefresh } from '../hooks';
 import { extractFromFiles, isImageFile, isPdfFile, type Progress } from '../ocr';
 
-type Row = PreviewRow & { manual?: boolean };
+type Row = PreviewRow & { manual?: boolean; orig?: { type: TxType; category_id: number | null }; forget?: boolean };
 interface ImportBatch { id: number; label: string; source_kind: string; created_at: string; transactions: number }
 
 const ACTIONS = { create: 'Importar', skip: 'Ignorar', link: 'Vincular ao já cadastrado' } as const;
@@ -48,6 +48,11 @@ export default function ImportPage({ month }: { month: string }) {
   const [invoiceDue, setInvoiceDue] = useState('');
   const [statementTotal, setStatementTotal] = useState<number | null>(null);
   const [result, setResult] = useState<{ created: number; linked: number; skipped: number } | null>(null);
+  // Texto lido do arquivo (PDF/OCR): fica na tela para você corrigir e reprocessar sem refazer o OCR.
+  const [readText, setReadText] = useState<{ text: string; origin: 'pdf' | 'ocr' } | null>(null);
+  const [editText, setEditText] = useState('');
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [pasted, setPasted] = useState('');
 
   const [tType, tIdStr] = target.split(':');
   const isCard = tType === 'card';
@@ -58,13 +63,25 @@ export default function ImportPage({ month }: { month: string }) {
 
   const batches = useQuery({ queryKey: ['import-batches'], queryFn: () => api.get<ImportBatch[]>('/data/imports') });
 
+  const applyPreview = (p: PreviewResponse) => {
+    setPreview(p);
+    setRows(p.rows.map((r) => ({ ...r, orig: { type: r.type, category_id: r.category_id } })));
+    setResult(null);
+    setInvoiceDue(p.pdf?.detected_due_date ?? '');
+    setStatementTotal(null);
+  };
+
   const load = useMutation({
     mutationFn: async (mapping?: Record<string, number>) => {
       if (!files.length || !target) throw new Error('Escolha a conta/cartão e o arquivo.');
       if (browserRead) {
         try {
           const { text, origin } = await extractFromFiles(files, setProgress);
-          if (!text.trim()) throw new Error('Não encontrei texto nos arquivos. Tente uma imagem mais nítida (print inteiro, sem cortes) ou o CSV do banco.');
+          if (!text.trim()) {
+            throw new Error('Não encontrei texto nos arquivos. Tente uma imagem mais nítida (print inteiro, sem cortes), cole o texto do extrato abaixo ou use o CSV do banco.');
+          }
+          setReadText({ text, origin });
+          setEditText(text);
           setProgress({ label: 'Interpretando lançamentos', fraction: 1 });
           return await api.post<PreviewResponse>('/import/preview-text', {
             target_type: tType, target_id: Number(tIdStr), ref_month: refMonth, origin, text,
@@ -82,12 +99,22 @@ export default function ImportPage({ month }: { month: string }) {
       form.set('file', files[0]);
       return api.upload<PreviewResponse>('/import/preview', form);
     },
-    onSuccess: (p) => {
-      setPreview(p);
-      setRows(p.rows);
-      setResult(null);
-      setInvoiceDue(p.pdf?.detected_due_date ?? '');
-      setStatementTotal(null);
+    onSuccess: (p) => applyPreview(p),
+  });
+
+  // Interpreta de novo um texto (corrigido por você ou colado), sem refazer o OCR.
+  const fromText = useMutation({
+    mutationFn: async (v: { text: string; origin: 'pdf' | 'ocr' }) => {
+      if (!target) throw new Error('Escolha a conta ou o cartão.');
+      if (!v.text.trim()) throw new Error('O texto está vazio.');
+      return api.post<PreviewResponse>('/import/preview-text', {
+        target_type: tType, target_id: Number(tIdStr), ref_month: refMonth, origin: v.origin, text: v.text,
+      });
+    },
+    onSuccess: (p, v) => {
+      setReadText(v);
+      setEditText(v.text);
+      applyPreview(p);
     },
   });
 
@@ -100,7 +127,7 @@ export default function ImportPage({ month }: { month: string }) {
         statement_total_cents: isCard && invoiceDue ? statementTotal : null,
         rows: chosen.map((r) => ({
           date: r.date, description: r.description, abs_cents: r.abs_cents, direction: r.direction, type: isCard ? 'expense' : r.type,
-          category_id: r.category_id, needs_review: r.needs_review, action: r.action,
+          category_id: r.category_id, needs_review: r.needs_review, action: r.action, remember: corrected(r) && !r.forget,
           link_to_id: r.action === 'link' ? r.duplicate?.id ?? null : null, hash: r.hash,
           transfer_account_id: r.transfer_account_id ?? null, card_id: r.card_id ?? null,
         })),
@@ -108,13 +135,18 @@ export default function ImportPage({ month }: { month: string }) {
     },
     onSuccess: (res) => {
       setResult({ ...res, skipped: rows.length - res.created - res.linked });
-      setPreview(null); setRows([]); setFiles([]);
+      setPreview(null); setRows([]); setFiles([]); setReadText(null); setPasted(''); setPasteOpen(false);
       if (fileRef.current) fileRef.current.value = '';
       refresh();
     },
   });
 
   const del = useMutation({ mutationFn: (id: number) => api.del(`/data/imports/${id}`), onSuccess: refresh });
+
+  // Correção do usuário em relação à sugestão: é isso que o sistema pode aprender (só nome do estabelecimento, tipo e categoria).
+  const corrected = (r: Row) =>
+    r.action !== 'skip' && (r.type === 'expense' || r.type === 'income' || !isCard) &&
+    (r.orig ? (!isCard && r.type !== r.orig.type) || r.category_id !== r.orig.category_id : r.category_id !== null);
 
   const update = (idx: number, patch: Partial<Row>) => setRows((rs) => rs.map((r) => (r.idx === idx ? { ...r, ...patch } : r)));
   const chosen = rows.filter((r) => r.action !== 'skip');
@@ -179,6 +211,37 @@ export default function ImportPage({ month }: { month: string }) {
               )}
             </form>
           )}
+          {accounts.length + cards.length > 0 && (
+            <div className="paste-box">
+              {readText && load.error && (
+                <p className="small">
+                  O texto já foi lido, só a interpretação falhou.{' '}
+                  <button type="button" className="btn small" disabled={fromText.isPending} onClick={() => fromText.mutate(readText)}>Tentar de novo sem refazer o OCR</button>
+                </p>
+              )}
+              <button type="button" className="btn small" onClick={() => setPasteOpen((o) => !o)}>
+                {pasteOpen ? 'Fechar' : 'Ou cole o texto do extrato (copiado do app ou do PDF)'}
+              </button>
+              {pasteOpen && (
+                <div className="stack">
+                  <Field label="Texto do extrato" hint="Cole as linhas como aparecem no app (data, descrição e valor). Nada é guardado; só os lançamentos que você aprovar.">
+                    <textarea rows={8} value={pasted} onChange={(e) => setPasted(e.target.value)} placeholder={'05 NOV\nMercado Central\n- R$ 120,50'} />
+                  </Field>
+                  {!isPdf && (
+                    <Field label={isCard ? 'Mês da fatura' : 'Mês do extrato'} hint="Usado para deduzir o ano das datas.">
+                      <input type="month" value={refMonth} onChange={(e) => setRefMonth(e.target.value)} required />
+                    </Field>
+                  )}
+                  <div className="form-actions">
+                    <button type="button" className="btn primary" disabled={fromText.isPending || !pasted.trim() || !target} onClick={() => fromText.mutate({ text: pasted, origin: 'pdf' })}>
+                      {fromText.isPending ? 'Interpretando…' : 'Interpretar texto colado'}
+                    </button>
+                  </div>
+                  <ErrorBox error={fromText.error} />
+                </div>
+              )}
+            </div>
+          )}
         </Panel>
       )}
 
@@ -189,6 +252,26 @@ export default function ImportPage({ month }: { month: string }) {
           {preview.pdf?.confidence === 'none' && <div className="alert bad"><strong>Revisão manual necessária.</strong> {preview.pdf.warnings.join(' ')} Você pode digitar as linhas abaixo olhando o arquivo.</div>}
           {preview.pdf?.confidence === 'low' && <div className="alert warn"><strong>{preview.source_kind === 'image' ? 'Texto lido de imagem (OCR) — confira cada linha com a imagem aberta.' : 'Leitura do PDF pouco confiável — confira cada linha com o PDF aberto.'}</strong> {' '}{preview.pdf.warnings.join(' ')} As linhas vieram desmarcadas: marque “Importar” só nas que conferir.{' '}
             <button className="btn small" onClick={() => setRows((rs) => rs.map((r) => (r.date && r.direction && r.duplicate?.level !== 'exact' ? { ...r, action: r.duplicate?.level === 'possible' && r.duplicate.status === 'scheduled' ? 'link' : 'create' } : r)))}>Já conferi: marcar todas para importar</button></div>}
+          {preview.pdf?.stats && preview.pdf.confidence !== 'ok' && (
+            <p className="muted small">
+              Li {preview.pdf.stats.lines} linha(s) de texto: {preview.pdf.stats.lines_with_money} com valor em reais (ex.: 1.234,56)
+              {preview.pdf.stats.date_headers > 0 && `, ${preview.pdf.stats.date_headers} data(s) como título de grupo`}.
+              {preview.pdf.stats.lines_with_money === 0 && ' Nenhum valor reconhecido: a imagem pode estar cortada, borrada ou com a vírgula decimal ilegível.'}
+            </p>
+          )}
+          {readText && (
+            <details className="read-text" open={preview.pdf?.confidence === 'none' || rows.length === 0}>
+              <summary className="small">Texto lido do arquivo — corrija e reprocesse se algo saiu errado</summary>
+              <textarea rows={10} value={editText} onChange={(e) => setEditText(e.target.value)} aria-label="Texto lido do arquivo" />
+              <div className="form-actions">
+                <button className="btn small" disabled={fromText.isPending || !editText.trim()} onClick={() => fromText.mutate({ text: editText, origin: readText.origin })}>
+                  {fromText.isPending ? 'Interpretando…' : 'Reprocessar este texto'}
+                </button>
+                <span className="muted small">Isto substitui as linhas abaixo (as edições feitas nelas se perdem).</span>
+              </div>
+              <ErrorBox error={fromText.error} />
+            </details>
+          )}
           {preview.pdf?.confidence === 'ok' && preview.pdf.warnings.length > 0 && <div className="alert warn">{preview.pdf.warnings.join(' ')}</div>}
           {preview.pdf?.reconciliation_cents === 0 && <div className="alert good small">A soma das linhas confere com o total da fatura lido no PDF ({brl(preview.pdf.detected_total_cents)}).</div>}
 
@@ -252,8 +335,14 @@ export default function ImportPage({ month }: { month: string }) {
                     </select>
                   )}
                   <label className="check"><input type="checkbox" checked={r.needs_review} onChange={(e) => update(r.idx, { needs_review: e.target.checked })} /> revisar depois</label>
+                  {corrected(r) && (
+                    <label className="check" title="Guarda só o nome do estabelecimento e a classificação (sem valores nem datas).">
+                      <input type="checkbox" checked={!r.forget} onChange={(e) => update(r.idx, { forget: !e.target.checked })} /> lembrar esta correção
+                    </label>
+                  )}
                 </div>
                 <div className="import-notes">
+                  {r.learned && <Badge tone="info" title="Classificação lembrada de correções anteriores. Gerencie em Configurações › Regras aprendidas.">aprendida ({r.learned.uses}×)</Badge>}
                   {r.installment && <Badge tone="info" title="Compra parcelada">parcela {r.installment.no}/{r.installment.total}</Badge>}
                   {r.uncertain_reason && <Badge tone="warn">conferir: {r.uncertain_reason}</Badge>}
                   {r.duplicate?.level === 'exact' && <Badge tone="bad">duplicata exata</Badge>}

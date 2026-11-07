@@ -1,6 +1,29 @@
 import { getAccessToken } from './supabase';
 
-export class ApiError extends Error {}
+export class ApiError extends Error {
+  constructor(message: string, public status = 0) {
+    super(message);
+  }
+}
+
+/** Mensagem clara para quem usa; o servidor nunca devolve conteúdo de extratos nos erros. */
+function friendly(status: number, serverMessage?: string): string {
+  if (status === 401) return 'Sua sessão expirou. Clique em Sair e entre de novo.';
+  if (status === 403) return serverMessage ?? 'Este usuário não tem permissão (e-mail fora da lista permitida ou verificação em duas etapas pendente).';
+  if (status === 413) return serverMessage ?? 'O arquivo ou texto é grande demais. Envie menos imagens por vez.';
+  if (status === 429) return 'Muitas requisições em pouco tempo. Aguarde um minuto e tente de novo.';
+  if (status === 504 || status === 502 || status === 503) return `O servidor demorou a responder (erro ${status}). Tente de novo com menos imagens ou mais tarde.`;
+  if (status >= 500) return serverMessage ?? `O servidor falhou (erro ${status}). Tente de novo; se continuar, veja os logs da função no Vercel.`;
+  return serverMessage ?? `Erro ${status}`;
+}
+
+async function send(input: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch {
+    throw new ApiError('Não consegui falar com o servidor. Verifique sua internet e tente de novo.', 0);
+  }
+}
 
 async function authHeader(): Promise<Record<string, string>> {
   const token = await getAccessToken();
@@ -8,14 +31,14 @@ async function authHeader(): Promise<Record<string, string>> {
 }
 
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
-  const res = await fetch(`/api${url}`, {
+  const res = await send(`/api${url}`, {
     method,
     headers: { ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}), ...(await authHeader()) },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   if (res.status === 204) return undefined as T;
   const data = await res.json().catch(() => null);
-  if (!res.ok) throw new ApiError(data?.error ?? `Erro ${res.status}`);
+  if (!res.ok) throw new ApiError(friendly(res.status, data?.error), res.status);
   return data as T;
 }
 
@@ -26,9 +49,9 @@ export const api = {
   patch: <T>(url: string, body: unknown) => request<T>('PATCH', url, body),
   del: <T = void>(url: string) => request<T>('DELETE', url),
   async upload<T>(url: string, form: FormData): Promise<T> {
-    const res = await fetch(`/api${url}`, { method: 'POST', body: form, headers: await authHeader() });
+    const res = await send(`/api${url}`, { method: 'POST', body: form, headers: await authHeader() });
     const data = await res.json().catch(() => null);
-    if (!res.ok) throw new ApiError(data?.error ?? `Erro ${res.status}`);
+    if (!res.ok) throw new ApiError(friendly(res.status, data?.error), res.status);
     return data as T;
   },
 };
@@ -97,6 +120,10 @@ export interface Overview {
   spending: {
     realized_mine_cents: number; realized_total_cents: number; planned_mine_cents: number; planned_total_cents: number;
     planned_estimated_count: number; by_category: { name: string; realized_cents: number; planned_cents: number }[];
+    /** Custo total do mês (competência, minha parte): já pago + ainda previsto. */
+    total_mine_cents: number; estimated_count: number;
+    breakdown: { key: string; label: string; hint: string; count: number; paid_cents: number; planned_cents: number; total_cents: number; projected_count: number }[];
+    excluded: { code: string; label: string; count: number; amount_cents: number; reason: string }[];
   };
   income: {
     received_net_cents: number; scheduled_net_cents: number; gross_cents: number; deductions_cents: number; net_cents: number;
@@ -139,9 +166,14 @@ export interface PreviewRow {
   type: TxType; category_id: number | null; needs_review: boolean; note: string | null; uncertain_reason: string | null;
   action: 'create' | 'skip' | 'link'; hash: string | null;
   duplicate: null | { level: 'exact' | 'possible'; id: number; description: string; date: string | null; status: string };
+  learned?: { id: number; uses: number } | null;
   // preenchidos na tela
   transfer_account_id?: number | null; card_id?: number | null;
   installment?: { no: number; total: number; bare: boolean } | null;
+}
+export interface LearnedRule {
+  id: number; kind: 'account' | 'card'; pattern: string; category_id: number | null; category_name: string | null;
+  type: TxType | null; ignore: boolean; use_count: number; created_at: string; last_used_at: string;
 }
 export interface PreviewResponse {
   source_kind: 'csv' | 'pdf' | 'image';
@@ -151,6 +183,7 @@ export interface PreviewResponse {
   pdf: null | {
     confidence: 'ok' | 'low' | 'none'; candidate_lines: number; parsed_lines: number;
     detected_due_date: string | null; detected_total_cents: number | null; reconciliation_cents: number | null; warnings: string[];
+    stats?: { lines: number; lines_with_money: number; date_headers: number; reader: 'classic' | 'app' };
   };
   rows: PreviewRow[];
 }

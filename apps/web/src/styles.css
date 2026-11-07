@@ -211,3 +211,14 @@ input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px s
 .qr-box img { width: 168px; height: 168px; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 6px; }
 .secret { word-break: break-all; user-select: all; }
 .progress progress { width: 100%; height: 10px; }
+
+.cost-details summary { cursor: pointer; margin-bottom: 0.5rem; }
+.cost-details .subhead { margin: 1rem 0 0.25rem; font-size: 0.95rem; }
+.total-row { border-top: 2px solid var(--line); }
+
+.paste-box { margin-top: 1rem; display: flex; flex-direction: column; gap: 0.75rem; }
+.paste-box textarea, .read-text textarea { width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85rem; }
+.read-text { margin: 0.75rem 0; }
+.read-text summary { cursor: pointer; margin-bottom: 0.5rem; }
+
+.rule-controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; justify-content: flex-end; }

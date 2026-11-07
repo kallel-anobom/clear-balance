@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
-import { api, type Account, type Recurring } from '../api';
+import { api, type Account, type LearnedRule, type Recurring, type TxType } from '../api';
 import { Badge, Empty, ErrorBox, Field, Loading, Modal, MoneyField, Panel } from '../components';
 import { brl, dateBR, monthShort, todayISO } from '../format';
 import { useLookups, useRefresh } from '../hooks';
@@ -134,6 +134,62 @@ function RecurringForm({ item, onClose }: { item?: Recurring; onClose: () => voi
   );
 }
 
+const RULE_TYPES: Record<TxType, string> = {
+  expense: 'Despesa', income: 'Receita', transfer: 'Transferência entre contas', reimbursement: 'Reembolso',
+  invoice_payment: 'Pagamento de fatura', overdraft_payment: 'Pagamento do cheque especial',
+};
+
+/** O que o sistema aprendeu com suas correções nas importações. Só nome de estabelecimento e classificação. */
+function RulesPanel() {
+  const { categories } = useLookups();
+  const refresh = useRefresh();
+  const rules = useQuery({ queryKey: ['rules'], queryFn: () => api.get<LearnedRule[]>('/rules') });
+  const patch = useMutation({
+    mutationFn: ({ id, ...body }: { id: number } & Partial<Pick<LearnedRule, 'category_id' | 'type' | 'ignore'>>) => api.patch(`/rules/${id}`, body),
+    onSuccess: refresh,
+  });
+  const del = useMutation({ mutationFn: (id: number) => api.del(`/rules/${id}`), onSuccess: refresh });
+  const clear = useMutation({ mutationFn: () => api.del('/rules'), onSuccess: refresh });
+  const list = rules.data ?? [];
+  return (
+    <Panel title="Regras aprendidas" action={list.length > 0 ? <button className="btn small danger" disabled={clear.isPending} onClick={() => confirm('Esquecer todas as regras aprendidas?') && clear.mutate()}>Esquecer tudo</button> : undefined}>
+      <p className="muted small">
+        Quando você corrige o tipo ou a categoria de uma linha na importação e marca “lembrar esta correção”, o sistema guarda <strong>apenas o nome do estabelecimento</strong> (sem números, datas ou valores) e a classificação escolhida, e a sugere nas próximas importações. Tudo fica na sua própria base: nada é enviado a serviços externos.
+      </p>
+      {rules.isLoading ? <Loading /> : list.length === 0 ? <Empty>Nada aprendido ainda. Corrija uma categoria ao importar um extrato.</Empty> : (
+        <ul className="rows">{list.map((r) => (
+          <li className="row" key={r.id}>
+            <div className="row-main">
+              <strong>{r.pattern}</strong>
+              <div className="row-sub">
+                <Badge>{r.kind === 'card' ? 'cartão' : 'conta'}</Badge>
+                <span>confirmada {r.use_count}×</span>
+                {r.ignore && <Badge tone="warn">ignorar</Badge>}
+              </div>
+            </div>
+            <div className="row-amount rule-controls">
+              {r.kind === 'account' && (
+                <select aria-label="Tipo" value={r.type ?? ''} onChange={(e) => patch.mutate({ id: r.id, type: (e.target.value || null) as TxType | null })}>
+                  <option value="">Tipo automático</option>
+                  {Object.entries(RULE_TYPES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                </select>
+              )}
+              {(r.type === null || r.type === 'expense' || r.type === 'income') && (
+                <select aria-label="Categoria" value={r.category_id ?? ''} onChange={(e) => patch.mutate({ id: r.id, category_id: e.target.value ? Number(e.target.value) : null })}>
+                  <option value="">Sem categoria</option>
+                  {categories.filter((c) => r.type !== 'income' ? c.kind === 'expense' || r.type === null : c.kind === 'income').map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              )}
+              <label className="check"><input type="checkbox" checked={r.ignore} onChange={(e) => patch.mutate({ id: r.id, ignore: e.target.checked })} /> ignorar sempre</label>
+              <button className="btn small danger" onClick={() => del.mutate(r.id)}>Esquecer</button>
+            </div>
+          </li>))}</ul>
+      )}
+      <ErrorBox error={patch.error ?? del.error ?? clear.error} />
+    </Panel>
+  );
+}
+
 export default function SettingsPage() {
   const { accounts } = useLookups();
   const refresh = useRefresh();
@@ -213,10 +269,13 @@ export default function SettingsPage() {
         <ErrorBox error={saveNames.error} />
       </Panel>
 
+      <RulesPanel />
+
       <Panel title="Privacidade e dados">
         <ul className="plain">
           <li>Os dados ficam no <strong>PostgreSQL</strong> (local, ou no seu projeto Supabase quando hospedado) e só são acessíveis depois do login. Nenhum dado é enviado a serviços de terceiros além do seu próprio banco.</li>
           <li>O sistema <strong>não guarda</strong> senhas bancárias, tokens, CVV nem número completo de cartão (apenas os 4 últimos dígitos, se você informar).</li>
+          <li>As <strong>regras aprendidas</strong> guardam só o nome do estabelecimento e a classificação que você escolheu, nunca valores, datas ou o texto do extrato.</li>
           <li>Arquivos importados (CSV/PDF) não são armazenados e o conteúdo deles não vai para os logs; só os lançamentos aprovados são salvos.</li>
         </ul>
         {summary.data && <p className="muted small">Hoje: {summary.data.transactions} lançamentos ({summary.data.imported_transactions} importados), {summary.data.accounts} contas, {summary.data.cards} cartões, {summary.data.invoices} faturas.</p>}
@@ -228,7 +287,7 @@ export default function SettingsPage() {
         </div>
         <ErrorBox error={delImports.error} />
         <div className="danger-zone">
-          <p className="small"><strong>Apagar todos os dados</strong> (contas, cartões, faturas, lançamentos e recorrências). Não dá para desfazer — faça um backup antes. Digite <code>APAGAR TUDO</code> para confirmar:</p>
+          <p className="small"><strong>Apagar todos os dados</strong> (contas, cartões, faturas, lançamentos, recorrências e regras aprendidas). Não dá para desfazer — faça um backup antes. Digite <code>APAGAR TUDO</code> para confirmar:</p>
           <div className="inline-form">
             <input value={confirmText} onChange={(e) => setConfirmText(e.target.value)} placeholder="APAGAR TUDO" aria-label="Confirmação" />
             <button className="btn danger" disabled={confirmText !== 'APAGAR TUDO' || wipe.isPending} onClick={() => wipe.mutate()}>Apagar tudo</button>

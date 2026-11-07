@@ -30,6 +30,59 @@ function FlowRow({ item, onPay, month }: { item: FlowItem; onPay: (i: FlowItem) 
   );
 }
 
+function CostBreakdown({ spending }: { spending: Overview['spending'] }) {
+  const { breakdown, excluded } = spending;
+  if (breakdown.length === 0 && excluded.length === 0) return null;
+  const sum = breakdown.reduce((a, b) => a + b.total_cents, 0);
+  return (
+    <Panel title="Como chegamos no custo do mês">
+      <details className="cost-details" open={spending.total_mine_cents > 0}>
+        <summary className="muted small">
+          Custo = tudo o que você gastou no mês (compras do cartão contam na data da compra). Clique para ver a conta.
+        </summary>
+        {breakdown.length === 0 ? <Empty>Sem despesas neste mês.</Empty> : (
+          <ul className="rows">
+            {breakdown.map((b) => (
+              <li className="row" key={b.key}>
+                <div className="row-main">
+                  <strong>{b.label}</strong>
+                  <div className="row-sub">
+                    {b.count} {b.count === 1 ? 'lançamento' : 'lançamentos'} · já gasto {brl(b.paid_cents)} · previsto {brl(b.planned_cents)}
+                    {b.projected_count > 0 && <Badge tone="warn" title="Parcelas futuras previstas a partir de compras parceladas">{b.projected_count} prevista{b.projected_count > 1 ? 's' : ''}</Badge>}
+                  </div>
+                  <div className="muted small">{b.hint}</div>
+                </div>
+                <div className="row-amount"><strong>{brl(b.total_cents)}</strong></div>
+              </li>
+            ))}
+            <li className="row total-row">
+              <div className="row-main"><strong>Custo total do mês</strong></div>
+              <div className="row-amount"><strong>{brl(sum)}</strong></div>
+            </li>
+          </ul>
+        )}
+        {excluded.length > 0 && (
+          <>
+            <h4 className="subhead">Não entra no custo (para não contar duas vezes)</h4>
+            <ul className="rows">
+              {excluded.map((e) => (
+                <li className="row" key={e.code}>
+                  <div className="row-main">
+                    <strong>{e.label}</strong>
+                    <div className="row-sub">{e.count} {e.count === 1 ? 'item' : 'itens'}</div>
+                    <div className="muted small">{e.reason}</div>
+                  </div>
+                  <div className="row-amount"><span className="muted">{brl(e.amount_cents)}</span></div>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </details>
+    </Panel>
+  );
+}
+
 export default function OverviewPage({ month }: { month: string }) {
   const q = useQuery({ queryKey: ['overview', month], queryFn: () => api.get<Overview>(`/overview${qs({ month })}`) });
   const [paying, setPaying] = useState<{ id: number; label: string; amount: number; income?: boolean } | null>(null);
@@ -57,14 +110,16 @@ export default function OverviewPage({ month }: { month: string }) {
 
       <div className="kpis">
         <div className="kpi">
-          <span className="kpi-label">Gasto realizado (minha parte)</span>
-          <strong className="kpi-value">{brl(o.spending.realized_mine_cents)}</strong>
+          <span className="kpi-label">Custo total do mês (minha parte)</span>
+          <strong className="kpi-value">{brl(o.spending.total_mine_cents)}</strong>
           <span className="kpi-sub">
-            {hasShared ? `Total pago pelas contas: ${brl(o.spending.realized_total_cents)}` : 'Compras e contas já realizadas'}
+            Já gasto {brl(o.spending.realized_mine_cents)} · ainda previsto {brl(o.spending.planned_mine_cents)}
+            {o.spending.estimated_count > 0 && ` · ${o.spending.estimated_count} estimado${o.spending.estimated_count > 1 ? 's' : ''}`}
+            {hasShared && ` · total pago pelas contas ${brl(o.spending.realized_total_cents)}`}
           </span>
         </div>
         <div className="kpi">
-          <span className="kpi-label">Ainda vai sair da conta</span>
+          <span className="kpi-label">Ainda vai sair da conta (caixa)</span>
           <strong className="kpi-value">{brl(o.cash.pending_cents)}</strong>
           <span className="kpi-sub">{pending.length} {pending.length === 1 ? 'item pendente' : 'itens pendentes'} · já saiu {brl(o.cash.paid_cents)}</span>
         </div>
@@ -86,6 +141,8 @@ export default function OverviewPage({ month }: { month: string }) {
           </span>
         </div>
       </div>
+
+      <CostBreakdown spending={o.spending} />
 
       {f.pending_outflows_cents > 0 && o.reimbursements.pending_month_cents > 0 && (
         <p className="muted small">
