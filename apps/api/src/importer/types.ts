@@ -8,6 +8,10 @@ export interface ParsedRow {
   direction: 'in' | 'out' | null;
   /** Motivo pelo qual a linha precisa de conferência manual. */
   uncertain_reason: string | null;
+  /** Linha proposta pela IA (sempre revisada pelo usuário antes de salvar). */
+  ai?: boolean;
+  /** Categoria sugerida pela IA (slug), usada só se nada mais específico existir. */
+  ai_category_slug?: string | null;
 }
 
 export type TargetKind = 'account' | 'card';

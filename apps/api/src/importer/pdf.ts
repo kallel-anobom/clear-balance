@@ -43,7 +43,7 @@ export interface PdfParseResult {
   reconciliation_cents: number | null;
   warnings: string[];
   /** Números sobre o texto lido (nunca o texto), para explicar na tela por que algo não foi reconhecido. */
-  stats: { lines: number; lines_with_money: number; date_headers: number; reader: 'classic' | 'app' };
+  stats: { lines: number; lines_with_money: number; date_headers: number; reader: 'classic' | 'app' | 'ai' };
 }
 
 /** Correções leves e seguras para erros comuns de OCR (espaços perdidos/sobrando em valores e datas). */

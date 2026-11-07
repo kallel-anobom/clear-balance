@@ -167,6 +167,7 @@ export interface PreviewRow {
   action: 'create' | 'skip' | 'link'; hash: string | null;
   duplicate: null | { level: 'exact' | 'possible'; id: number; description: string; date: string | null; status: string };
   learned?: { id: number; uses: number } | null;
+  ai?: boolean;
   // preenchidos na tela
   transfer_account_id?: number | null; card_id?: number | null;
   installment?: { no: number; total: number; bare: boolean } | null;
@@ -183,7 +184,7 @@ export interface PreviewResponse {
   pdf: null | {
     confidence: 'ok' | 'low' | 'none'; candidate_lines: number; parsed_lines: number;
     detected_due_date: string | null; detected_total_cents: number | null; reconciliation_cents: number | null; warnings: string[];
-    stats?: { lines: number; lines_with_money: number; date_headers: number; reader: 'classic' | 'app' };
+    stats?: { lines: number; lines_with_money: number; date_headers: number; reader: 'classic' | 'app' | 'ai' };
   };
   rows: PreviewRow[];
 }
