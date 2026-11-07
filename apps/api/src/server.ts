@@ -42,7 +42,7 @@ export async function buildApp(options: { auth?: AuthConfig } = {}) {
     if (err.statusCode && err.statusCode < 500) return reply.code(err.statusCode).send({ error: 'Requisição inválida.' });
     // Só registra o tipo do erro — mensagens do banco podem conter valores dos lançamentos.
     app.log.error({ code: err.code, name: err.name }, 'erro interno');
-    return reply.code(500).send({ error: 'Erro interno. Veja o terminal da API.' });
+    return reply.code(500).send({ error: 'Erro interno do servidor. Tente de novo; se continuar, veja os logs da API (terminal local ou Logs da função no Vercel).' });
   });
 
   await app.register(

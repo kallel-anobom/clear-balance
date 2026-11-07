@@ -1,6 +1,29 @@
 import { getAccessToken } from './supabase';
 
-export class ApiError extends Error {}
+export class ApiError extends Error {
+  constructor(message: string, public status = 0) {
+    super(message);
+  }
+}
+
+/** Mensagem clara para quem usa; o servidor nunca devolve conteúdo de extratos nos erros. */
+function friendly(status: number, serverMessage?: string): string {
+  if (status === 401) return 'Sua sessão expirou. Clique em Sair e entre de novo.';
+  if (status === 403) return serverMessage ?? 'Este usuário não tem permissão (e-mail fora da lista permitida ou verificação em duas etapas pendente).';
+  if (status === 413) return serverMessage ?? 'O arquivo ou texto é grande demais. Envie menos imagens por vez.';
+  if (status === 429) return 'Muitas requisições em pouco tempo. Aguarde um minuto e tente de novo.';
+  if (status === 504 || status === 502 || status === 503) return `O servidor demorou a responder (erro ${status}). Tente de novo com menos imagens ou mais tarde.`;
+  if (status >= 500) return serverMessage ?? `O servidor falhou (erro ${status}). Tente de novo; se continuar, veja os logs da função no Vercel.`;
+  return serverMessage ?? `Erro ${status}`;
+}
+
+async function send(input: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch {
+    throw new ApiError('Não consegui falar com o servidor. Verifique sua internet e tente de novo.', 0);
+  }
+}
 
 async function authHeader(): Promise<Record<string, string>> {
   const token = await getAccessToken();
@@ -8,14 +31,14 @@ async function authHeader(): Promise<Record<string, string>> {
 }
 
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
-  const res = await fetch(`/api${url}`, {
+  const res = await send(`/api${url}`, {
     method,
     headers: { ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}), ...(await authHeader()) },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   if (res.status === 204) return undefined as T;
   const data = await res.json().catch(() => null);
-  if (!res.ok) throw new ApiError(data?.error ?? `Erro ${res.status}`);
+  if (!res.ok) throw new ApiError(friendly(res.status, data?.error), res.status);
   return data as T;
 }
 
@@ -26,9 +49,9 @@ export const api = {
   patch: <T>(url: string, body: unknown) => request<T>('PATCH', url, body),
   del: <T = void>(url: string) => request<T>('DELETE', url),
   async upload<T>(url: string, form: FormData): Promise<T> {
-    const res = await fetch(`/api${url}`, { method: 'POST', body: form, headers: await authHeader() });
+    const res = await send(`/api${url}`, { method: 'POST', body: form, headers: await authHeader() });
     const data = await res.json().catch(() => null);
-    if (!res.ok) throw new ApiError(data?.error ?? `Erro ${res.status}`);
+    if (!res.ok) throw new ApiError(friendly(res.status, data?.error), res.status);
     return data as T;
   },
 };
@@ -155,6 +178,7 @@ export interface PreviewResponse {
   pdf: null | {
     confidence: 'ok' | 'low' | 'none'; candidate_lines: number; parsed_lines: number;
     detected_due_date: string | null; detected_total_cents: number | null; reconciliation_cents: number | null; warnings: string[];
+    stats?: { lines: number; lines_with_money: number; date_headers: number; reader: 'classic' | 'app' };
   };
   rows: PreviewRow[];
 }

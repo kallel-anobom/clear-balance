@@ -42,6 +42,8 @@ export interface PdfParseResult {
   detected_total_cents: number | null;
   reconciliation_cents: number | null;
   warnings: string[];
+  /** Números sobre o texto lido (nunca o texto), para explicar na tela por que algo não foi reconhecido. */
+  stats: { lines: number; lines_with_money: number; date_headers: number; reader: 'classic' | 'app' };
 }
 
 /** Correções leves e seguras para erros comuns de OCR (espaços perdidos/sobrando em valores e datas). */
@@ -152,11 +154,13 @@ export function parseStatementText(
   // Formato de app de banco (data como título do grupo, valor em outra linha): tenta o leitor flexível
   // quando o leitor clássico não entendeu o documento.
   let layoutUsed = false;
+  let dateHeaders = 0;
   if (rows.length === 0 || (candidates > 0 && rows.length < candidates * 0.8)) {
     const lay = parseLayoutLines(lines, { kind: opts.kind, refMonth: opts.refMonth, today: opts.today ?? todayISO() });
     if (lay.rows.length > rows.length) {
       rows = lay.rows;
       layoutUsed = true;
+      dateHeaders = lay.dateHeaders;
       yearless = yearless || lay.yearless;
       warnings.push(
         `Formato de app reconhecido (${lay.dateHeaders} data${lay.dateHeaders === 1 ? '' : 's'} como título de grupo). Compare cada linha com a imagem.`,
@@ -202,5 +206,11 @@ export function parseStatementText(
     detected_total_cents: detectedTotal,
     reconciliation_cents: reconciliation,
     warnings,
+    stats: {
+      lines: lines.length,
+      lines_with_money: lines.filter((l) => l.match(MONEY_TOKEN) !== null).length,
+      date_headers: dateHeaders,
+      reader: layoutUsed ? 'app' : 'classic',
+    },
   };
 }
