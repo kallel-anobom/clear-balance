@@ -221,6 +221,9 @@ function AiPanel() {
       <p className="muted small">
         Quando o leitor automático não entende um extrato, você pode pedir ajuda ao Claude (Anthropic) pelo botão <strong>Tentar com IA</strong> na importação. Só então o <strong>texto</strong> do extrato é enviado, nunca o arquivo, e antes disso o servidor troca CPF/CNPJ, e-mails, telefones e números de conta ou cartão por marcadores. Nomes de estabelecimentos (e de pessoas, em PIX) seguem no texto. A IA apenas propõe linhas desmarcadas: você revisa tudo antes de salvar.
       </p>
+      <p className="muted small">
+        Com a IA ligada, a Visão do mês também ganha o botão <strong>Gerar resumo do mês</strong>: aí a IA recebe só <strong>totais por categoria, orçamento e comparações</strong> (sem descrições, datas ou nomes de estabelecimentos) e escreve um texto curto. Cada uso, de importação ou de resumo, conta no limite mensal.
+      </p>
       {!ai ? <Loading /> : (
         <>
           <label className="check">
@@ -326,7 +329,7 @@ export default function SettingsPage() {
         <ul className="plain">
           <li>Os dados ficam no <strong>PostgreSQL</strong> (local, ou no seu projeto Supabase quando hospedado) e só são acessíveis depois do login. Nenhum dado é enviado a serviços de terceiros além do seu próprio banco.</li>
           <li>O sistema <strong>não guarda</strong> senhas bancárias, tokens, CVV nem número completo de cartão (apenas os 4 últimos dígitos, se você informar).</li>
-          <li>A <strong>IA opcional</strong> fica desligada até você ligar; ao usá-la, só o texto anonimizado do extrato vai à Anthropic.</li>
+          <li>A <strong>IA opcional</strong> fica desligada até você ligar; ao usá-la, só o texto anonimizado do extrato (importação) ou totais por categoria (resumo do mês) vão à Anthropic.</li>
           <li>As <strong>regras aprendidas</strong> guardam só o nome do estabelecimento e a classificação que você escolheu, nunca valores, datas ou o texto do extrato.</li>
           <li>Arquivos importados (CSV/PDF) não são armazenados e o conteúdo deles não vai para os logs; só os lançamentos aprovados são salvos.</li>
         </ul>

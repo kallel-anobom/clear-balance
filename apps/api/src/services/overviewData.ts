@@ -1,5 +1,6 @@
 import { pool } from '../db.js';
 import { monthBounds, todayISO } from '../lib.js';
+import { compareCosts, previousMonths, type CostComparison } from './compare.js';
 import { computeOverview } from './overview.js';
 
 /** Busca os dados do mês e calcula a visão completa. Usada pela Visão do mês e pela comparação entre meses. */
@@ -62,4 +63,12 @@ export async function buildOverview(month: string, today: string = todayISO()) {
       remaining_cents: inst.remaining_cents, remaining_count: inst.remaining_count, last_month: inst.last_month,
     },
   };
+}
+
+/** Custo do mês contra a média dos até 3 meses anteriores que têm gastos. `current` evita recalcular o mês atual. */
+export async function loadComparison(month: string, current?: Awaited<ReturnType<typeof buildOverview>>): Promise<CostComparison> {
+  const months = previousMonths(month);
+  const [cur, ...prev] = await Promise.all([current ?? buildOverview(month), ...months.map((m) => buildOverview(m))]);
+  const cost = (m: string, o: typeof cur) => ({ month: m, total_mine_cents: o.spending.total_mine_cents, by_category: o.spending.by_category });
+  return compareCosts(cost(month, cur), months.map((m, i) => cost(m, prev[i])));
 }

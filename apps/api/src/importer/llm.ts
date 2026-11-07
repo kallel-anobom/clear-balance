@@ -1,20 +1,15 @@
 import { z } from 'zod';
 import { isValidDate, parseMoney } from '../lib.js';
+import { AiError, callAnthropicTool, type AiErrorCode } from './anthropic.js';
 import type { ParsedRow, TargetKind } from './types.js';
+
+export { AiError, type AiErrorCode };
 
 /**
  * Leitor de reserva com IA (Anthropic). A IA só PROPÕE linhas: elas chegam desmarcadas, com aviso, e
  * o usuário revisa tudo antes de salvar. Nada aqui grava no banco. O texto deve vir anonimizado (redact.ts).
  * Mensagens de erro e logs nunca incluem o texto do extrato nem o corpo das respostas.
  */
-export type AiErrorCode = 'no_key' | 'timeout' | 'upstream' | 'auth' | 'rate' | 'too_big' | 'bad_output';
-
-export class AiError extends Error {
-  constructor(public code: AiErrorCode, message: string, public status = 502) {
-    super(message);
-  }
-}
-
 export interface AiCategory { slug: string; name: string; kind: 'expense' | 'income' }
 export interface AiExample { merchant: string; category_slug: string }
 
@@ -36,7 +31,6 @@ export interface AiResult {
 }
 
 export const MAX_AI_TEXT_CHARS = 60_000;
-const API_URL = 'https://api.anthropic.com/v1/messages';
 const TOOL = 'registrar_lancamentos';
 
 const SYSTEM = `Você extrai lançamentos de textos de extratos bancários e faturas de cartão brasileiros.
@@ -107,47 +101,21 @@ export async function interpretWithAi(text: string, o: AiOptions): Promise<AiRes
   if (text.length > MAX_AI_TEXT_CHARS) {
     throw new AiError('too_big', 'O texto é grande demais para a IA de uma vez. Envie menos páginas ou divida o extrato.', 413);
   }
-  const doFetch = o.fetchImpl ?? fetch;
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), o.timeoutMs ?? 25_000);
-  let res: Response;
-  try {
-    res = await doFetch(API_URL, {
-      method: 'POST',
-      signal: ctrl.signal,
-      headers: { 'content-type': 'application/json', 'x-api-key': o.apiKey, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({
-        model: o.model,
-        max_tokens: 8192,
-        temperature: 0,
-        system: SYSTEM,
-        tools: [{ name: TOOL, description: 'Registra os lançamentos encontrados no extrato.', input_schema: inputSchema }],
-        tool_choice: { type: 'tool', name: TOOL },
-        messages: [{ role: 'user', content: buildPrompt(text, o) }],
-      }),
-    });
-  } catch (e) {
-    if ((e as { name?: string }).name === 'AbortError') {
-      throw new AiError('timeout', 'A IA demorou demais para responder. Tente com menos páginas.', 504);
-    }
-    throw new AiError('upstream', 'Não consegui falar com a IA. Tente de novo em instantes.', 502);
-  } finally {
-    clearTimeout(timer);
-  }
-
-  if (res.status === 401 || res.status === 403) throw new AiError('auth', 'A chave da Anthropic foi recusada. Confira a ANTHROPIC_API_KEY.', 502);
-  if (res.status === 429) throw new AiError('rate', 'A Anthropic limitou as requisições. Tente de novo em instantes.', 429);
-  if (!res.ok) throw new AiError('upstream', `A IA está indisponível agora (erro ${res.status}). Tente de novo mais tarde.`, 502);
-
-  const data = (await res.json().catch(() => null)) as {
-    content?: { type: string; name?: string; input?: unknown }[]; stop_reason?: string;
-    usage?: { input_tokens?: number; output_tokens?: number };
-  } | null;
-  if (data?.stop_reason === 'max_tokens') {
-    throw new AiError('too_big', 'A resposta da IA ficou grande demais. Envie menos páginas por vez.', 422);
-  }
-  const block = data?.content?.find((b) => b.type === 'tool_use' && b.name === TOOL);
-  const parsed = outputSchema.safeParse(block?.input);
+  const { input, usage } = await callAnthropicTool({
+    apiKey: o.apiKey,
+    model: o.model,
+    system: SYSTEM,
+    user: buildPrompt(text, o),
+    tool: { name: TOOL, description: 'Registra os lançamentos encontrados no extrato.', input_schema: inputSchema },
+    maxTokens: 8192,
+    timeoutMs: o.timeoutMs,
+    fetchImpl: o.fetchImpl,
+    messages: {
+      timeout: 'A IA demorou demais para responder. Tente com menos páginas.',
+      too_big: 'A resposta da IA ficou grande demais. Envie menos páginas por vez.',
+    },
+  });
+  const parsed = outputSchema.safeParse(input);
   if (!parsed.success) throw new AiError('bad_output', 'A IA devolveu uma resposta fora do formato esperado. Nada foi importado.', 502);
 
   const known = amountsInText(text);
@@ -184,6 +152,5 @@ export async function interpretWithAi(text: string, o: AiOptions): Promise<AiRes
   const warnings = ['Interpretado por IA: confira cada data, valor e entrada/saída com o extrato antes de salvar.'];
   if (unknownAmounts > 0) warnings.push(`${unknownAmounts} valor(es) não aparecem no texto enviado; estão marcados para conferir.`);
   if (dropped > 0) warnings.push(`${dropped} item(ns) da resposta da IA foram descartados por estarem fora do formato.`);
-  const usage = data?.usage ? { input_tokens: data.usage.input_tokens ?? 0, output_tokens: data.usage.output_tokens ?? 0 } : null;
   return { rows, warnings, usage };
 }
