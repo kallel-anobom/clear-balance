@@ -11,6 +11,59 @@ export interface Suggestion {
   skip_by_default: boolean;
   needs_review: boolean;
   note: string | null;
+  /** Categoria vinda de uma regra aprendida (tem prioridade sobre o histórico e as palavras-chave). */
+  category_id?: number | null;
+  /** Regra aprendida que gerou esta sugestão. */
+  learned?: { id: number; uses: number } | null;
+}
+
+/** Regra aprendida com as correções do usuário: só nome do estabelecimento e classificação, nunca valores. */
+export interface LearnedRule {
+  id: number;
+  kind: TargetKind;
+  pattern: string;
+  category_id: number | null;
+  type: SuggestedType | null;
+  ignore: boolean;
+  use_count: number;
+}
+
+const NOISE_TOKENS = new Set(['parc', 'parcela', 'compra', 'cartao', 'deb', 'debito', 'cred', 'credito', 'de', 'da', 'do', 'em', 'no', 'na', 'br', 'brasil', 'pix', 'ted', 'doc', 'enviado', 'enviada', 'recebido', 'recebida', 'transferencia']);
+
+/**
+ * Nome "essencial" do estabelecimento: sem acentos, números, códigos, parcelas e símbolos; até 3 palavras.
+ * "UBER *TRIP 1234 SAO PAULO BR" → "uber trip sao"; "PADARIA DO ZE PARC 02/10" → "padaria ze".
+ * Devolve '' quando não sobra nada confiável (a regra não é aprendida).
+ */
+export function merchantKey(description: string): string {
+  const tokens = normalizeText(description)
+    .replace(/\bparc(ela)?\s*\d+\s*(\/|de)\s*\d+/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .split(' ')
+    .filter((t) => t.length >= 2 && !/\d/.test(t) && !NOISE_TOKENS.has(t));
+  const key = tokens.slice(0, 3).join(' ');
+  return key.length >= 3 ? key.slice(0, 60) : '';
+}
+
+function matchRule(description: string, kind: TargetKind, rules: LearnedRule[] | undefined): LearnedRule | null {
+  if (!rules?.length) return null;
+  const key = merchantKey(description);
+  if (!key) return null;
+  let best: LearnedRule | null = null;
+  for (const r of rules) {
+    if (r.kind !== kind) continue;
+    if (key === r.pattern || key.startsWith(`${r.pattern} `)) {
+      if (!best || r.pattern.length > best.pattern.length) best = r;
+    }
+  }
+  return best;
+}
+
+/** O tipo aprendido só vale se fizer sentido para o contexto (cartão só tem compras; entrada não é pagamento). */
+function typeFits(type: SuggestedType, kind: TargetKind, direction: 'in' | 'out' | null): boolean {
+  if (kind === 'card') return type === 'expense';
+  if (direction === 'in') return ['income', 'reimbursement', 'transfer'].includes(type);
+  return ['expense', 'transfer', 'invoice_payment', 'overdraft_payment'].includes(type);
 }
 
 const OVERDRAFT_PAYMENT = /\b(pagamento|pgto|pag|amortizacao|cobertura|quitacao)\b.*\b(cheque especial|limite|lis)\b/;
@@ -32,12 +85,34 @@ const CATEGORY_KEYWORDS: [string, RegExp][] = [
   ['servicos', /\bvivo\b|\bclaro\b|\btim\b|\boi\b|internet|energia|enel|sabesp|\bagua\b|\bluz\b|telefone|gas natural/],
 ];
 
-export function suggest(opts: {
+interface SuggestOpts {
   description: string;
   direction: 'in' | 'out' | null;
   kind: TargetKind;
   ownNames: string[];
-}): Suggestion {
+  rules?: LearnedRule[];
+}
+
+/** Sugestão final: palavras-chave, corrigidas pelas regras que o usuário já ensinou. */
+export function suggest(opts: SuggestOpts): Suggestion {
+  const base = keywordSuggest(opts);
+  const rule = matchRule(opts.description, opts.kind, opts.rules);
+  if (!rule) return base;
+  const type = rule.type && typeFits(rule.type, opts.kind, opts.direction) ? rule.type : base.type;
+  const hasCategory = ['expense', 'income'].includes(type);
+  return {
+    ...base,
+    type,
+    category_slug: hasCategory ? base.category_slug : null,
+    category_id: hasCategory ? rule.category_id : null,
+    skip_by_default: rule.ignore || base.skip_by_default,
+    needs_review: rule.type ? false : base.needs_review,
+    note: rule.ignore ? 'Regra aprendida: você pediu para ignorar este estabelecimento.' : `Regra aprendida (usada ${rule.use_count}×): confira e ajuste se mudou.`,
+    learned: { id: rule.id, uses: rule.use_count },
+  };
+}
+
+function keywordSuggest(opts: SuggestOpts): Suggestion {
   const d = normalizeText(opts.description);
   const base: Suggestion = { type: opts.direction === 'in' ? 'income' : 'expense', category_slug: null, skip_by_default: false, needs_review: false, note: null };
 

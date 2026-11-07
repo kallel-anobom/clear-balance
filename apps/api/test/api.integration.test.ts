@@ -401,6 +401,79 @@ describe.skipIf(!available)('API + PostgreSQL', () => {
     });
   });
 
+  describe('aprendizado local: regras aprendidas', () => {
+    let cardId: number;
+    let lazer: number;
+    let mercado: number;
+    const text = (desc: string, valor: string) => `02/11 ${desc} ${valor}`;
+    const preview = async (desc: string, valor = '80,00') => {
+      const r = await json('POST', '/import/preview-text', { target_type: 'card', target_id: cardId, ref_month: '2026-11', origin: 'pdf', text: text(desc, valor) });
+      expect(r.status).toBe(200);
+      return r.body.rows[0] as Record<string, any>;
+    };
+    const commitRow = (row: Record<string, any>, extra: Record<string, unknown>) =>
+      json('POST', '/import/commit', {
+        target_type: 'card', target_id: cardId, source_kind: 'pdf',
+        rows: [{ date: row.date, description: row.description, abs_cents: row.abs_cents, direction: row.direction, type: 'expense', action: 'create', hash: row.hash, ...extra }],
+      });
+
+    it('aprende com a correção, aplica na próxima importação e não guarda valor nem data', async () => {
+      cardId = (await json('POST', '/cards', { name: 'Cartão Regras', last4: '1111', closing_day: 25, due_day: 5 })).body.id;
+      const cats = (await json('GET', '/categories')).body as { id: number; slug: string }[];
+      lazer = cats.find((c) => c.slug === 'lazer')!.id;
+      mercado = cats.find((c) => c.slug === 'mercado')!.id;
+
+      const first = await preview('ACADEMIA BOA FORMA 0042');
+      expect(first.category_id).toBeNull();
+      expect(first.learned).toBeNull();
+
+      // Sem "lembrar", nada é aprendido.
+      expect((await commitRow(first, { category_id: lazer })).status).toBe(201);
+      expect((await json('GET', '/rules')).body).toHaveLength(0);
+
+      const second = await preview('ACADEMIA BOA FORMA 0042', '81,00');
+      expect((await commitRow(second, { category_id: lazer, remember: true })).status).toBe(201);
+      const rules = (await json('GET', '/rules')).body as Record<string, any>[];
+      expect(rules).toHaveLength(1);
+      expect(rules[0]).toMatchObject({ kind: 'card', pattern: 'academia boa forma', category_id: lazer, type: 'expense', use_count: 1 });
+      // Privacidade: nada de valor, data ou texto do extrato na regra.
+      expect(Object.keys(rules[0]).sort()).toEqual(['category_id', 'category_name', 'created_at', 'id', 'ignore', 'kind', 'last_used_at', 'pattern', 'type', 'use_count']);
+      expect(rules[0].pattern).not.toMatch(/\d/); // sem valor, data ou código do extrato
+
+      const next = await preview('Academia Boa Forma 7781', '99,90');
+      expect(next.category_id).toBe(lazer);
+      expect(next.learned).toMatchObject({ id: rules[0].id, uses: 1 });
+      expect(next.note).toContain('aprendida');
+
+      // Corrigir de novo reforça a regra (muda a categoria e conta mais um uso).
+      await commitRow(next, { category_id: mercado, remember: true });
+      const again = (await json('GET', '/rules')).body[0];
+      expect(again).toMatchObject({ category_id: mercado, use_count: 2 });
+    });
+
+    it('editar e apagar uma regra muda as próximas sugestões', async () => {
+      const [rule] = (await json('GET', '/rules')).body as { id: number }[];
+      expect((await json('PATCH', `/rules/${rule.id}`, { category_id: lazer })).status).toBe(200);
+      expect((await preview('ACADEMIA BOA FORMA 1')).category_id).toBe(lazer);
+      expect((await json('PATCH', `/rules/${rule.id}`, { ignore: true })).status).toBe(200);
+      expect((await preview('ACADEMIA BOA FORMA 1')).action).toBe('skip');
+
+      expect((await json('DELETE', `/rules/${rule.id}`)).status).toBe(200);
+      expect((await json('DELETE', `/rules/${rule.id}`)).status).toBe(404);
+      expect((await json('GET', '/rules')).body).toHaveLength(0);
+      const gone = await preview('ACADEMIA BOA FORMA 1');
+      expect(gone.category_id).toBeNull();
+      expect(gone.learned).toBeNull();
+    });
+
+    it('regra criada à mão passa pelo mesmo normalizador; nome sem letras é recusado', async () => {
+      expect((await json('POST', '/rules', { kind: 'card', pattern: '12345' })).status).toBe(400);
+      const ok = await json('POST', '/rules', { kind: 'card', pattern: 'Loja Do Bairro 99', category_id: mercado });
+      expect(ok.status).toBe(201);
+      expect(ok.body.pattern).toBe('loja bairro');
+    });
+  });
+
   describe('login (API com autenticação ligada)', () => {
     it('exige token válido de e-mail autorizado; /health é público', async () => {
       const { publicKey, privateKey } = await generateKeyPair('ES256');
@@ -429,9 +502,11 @@ describe.skipIf(!available)('API + PostgreSQL', () => {
   });
 
   it('apagar tudo exige confirmação explícita', async () => {
+    expect((await json('GET', '/data/summary')).body.learned_rules).toBeGreaterThan(0);
     expect((await json('POST', '/data/wipe', {})).status).toBe(400);
     expect((await json('POST', '/data/wipe', { confirm: 'APAGAR TUDO' })).status).toBe(200);
-    expect((await json('GET', '/data/summary')).body).toMatchObject({ transactions: 0, accounts: 0, cards: 0 });
+    // A regra criada à mão no bloco de aprendizado também é apagada.
+    expect((await json('GET', '/data/summary')).body).toMatchObject({ transactions: 0, accounts: 0, cards: 0, learned_rules: 0 });
   });
 
   it('depois de apagar tudo, os dados iniciais podem ser carregados de novo', async () => {

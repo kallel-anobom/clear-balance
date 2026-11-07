@@ -5,7 +5,7 @@ import { pool, withTx, type Queryable } from '../db.js';
 import { config } from '../config.js';
 import { HttpError, badRequest } from '../errors.js';
 import { diffDays, isValidDate, monthOf, normalizeText } from '../lib.js';
-import { fingerprint, suggest } from '../importer/classify.js';
+import { fingerprint, merchantKey, suggest, type LearnedRule } from '../importer/classify.js';
 import { detectInstallment, installmentGroup } from '../importer/installments.js';
 import { parseCsv, type CsvMapping } from '../importer/csv.js';
 import { extractPdfText, parseStatementText, PdfError } from '../importer/pdf.js';
@@ -90,6 +90,8 @@ const commitRow = z.object({
   hash: z.string().max(100).nullable().optional(),
   transfer_account_id: z.number().int().positive().nullable().optional(),
   card_id: z.number().int().positive().nullable().optional(),
+  /** "Lembrar esta correção": grava uma regra com o nome do estabelecimento (sem valores nem datas). */
+  remember: z.boolean().optional(),
 });
 
 const commitBody = z.object({
@@ -202,11 +204,13 @@ interface PreviewInput {
 /** Classificação, categorias e detecção de duplicatas — comum a CSV, PDF e imagem (OCR). */
 async function enrichPreview({ kind, targetId, rows, skipped, csvInfo, pdfInfo, sourceKind }: PreviewInput) {
   // ----- Enriquecimento: classificação, categorias, duplicatas -----
-  const [cats, settings, history] = await Promise.all([
+  const [cats, settings, history, rulesRes] = await Promise.all([
     pool.query('select id, slug from categories'),
     pool.query(`select value from settings where key = 'own_transfer_names'`),
     pool.query(`select description, category_id from transactions where category_id is not null order by id desc limit 3000`),
+    pool.query('select id, kind, pattern, category_id, type, ignore, use_count from learned_rules'),
   ]);
+  const rules: LearnedRule[] = rulesRes.rows;
   const catBySlug = new Map<string, number>(cats.rows.map((c) => [c.slug, c.id]));
   const ownNames: string[] = settings.rows[0]?.value ?? [];
   const learned = new Map<string, number>();
@@ -253,9 +257,9 @@ async function enrichPreview({ kind, targetId, rows, skipped, csvInfo, pdfInfo, 
   const lowConfidence = pdfInfo?.confidence === 'low' || pdfInfo?.confidence === 'none';
 
   const out = withHash.map(({ r, hash }, idx) => {
-    const sug = suggest({ description: r.description, direction: r.direction, kind, ownNames });
+    const sug = suggest({ description: r.description, direction: r.direction, kind, ownNames, rules });
     const category_id =
-      learned.get(normalizeText(r.description)) ?? (sug.category_slug ? (catBySlug.get(sug.category_slug) ?? null) : null);
+      sug.category_id ?? learned.get(normalizeText(r.description)) ?? (sug.category_slug ? (catBySlug.get(sug.category_slug) ?? null) : null);
     let action: Action = sug.skip_by_default ? 'skip' : 'create';
     let duplicate: null | { level: 'exact' | 'possible'; id: number; description: string; date: string | null; status: string } = null;
     let note = sug.note;
@@ -287,6 +291,7 @@ async function enrichPreview({ kind, targetId, rows, skipped, csvInfo, pdfInfo, 
       direction: r.direction,
       type: sug.type,
       category_id,
+      learned: sug.learned ?? null,
       needs_review: sug.needs_review || !!r.uncertain_reason,
       note,
       uncertain_reason: r.uncertain_reason,
@@ -378,6 +383,8 @@ async function commit(db: PoolClient, b: CommitBody) {
     // Despesa com direção "entrada" é um estorno/crédito: valor negativo, abate o gasto.
     const signed = r.type === 'expense' && r.direction === 'in' ? -r.abs_cents : r.abs_cents;
 
+    if (r.remember) await rememberRule(db, kind, r);
+
     if (r.action === 'link') {
       if (!r.link_to_id) throw badRequest('Escolha o lançamento a vincular.');
       await link(db, r, signed, kind, b.target_id, { forcedInvoice, batchId });
@@ -435,6 +442,20 @@ async function commit(db: PoolClient, b: CommitBody) {
   }
   await db.query('update import_batches set row_count = $2 where id = $1', [batchId, created + linked]);
   return { batch_id: batchId, created, linked, skipped: b.rows.length - created - linked };
+}
+
+/** Grava (ou reforça) a regra do estabelecimento. Só guarda o nome normalizado, a categoria e o tipo. */
+async function rememberRule(db: Queryable, kind: TargetKind, r: CommitRow) {
+  const pattern = merchantKey(r.description);
+  if (!pattern) return;
+  const categoryId = ['expense', 'income'].includes(r.type) ? (r.category_id ?? null) : null;
+  await db.query(
+    `insert into learned_rules (kind, pattern, category_id, type) values ($1, $2, $3, $4)
+     on conflict (kind, pattern) do update
+       set category_id = excluded.category_id, type = excluded.type,
+           use_count = learned_rules.use_count + 1, last_used_at = now()`,
+    [kind, pattern, categoryId, r.type],
+  );
 }
 
 /** Fatura em aberto do cartão cujo valor bate exatamente com o pagamento (mais próxima da data). */
