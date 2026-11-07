@@ -5,13 +5,14 @@ import { pool, withTx, type Queryable } from '../db.js';
 import { config } from '../config.js';
 import { HttpError, badRequest } from '../errors.js';
 import { diffDays, isValidDate, monthOf, normalizeText } from '../lib.js';
-import { fingerprint, merchantKey, suggest, type LearnedRule } from '../importer/classify.js';
+import { fingerprint, suggest, type LearnedRule } from '../importer/classify.js';
 import { detectInstallment, installmentGroup } from '../importer/installments.js';
 import { parseCsv, type CsvMapping } from '../importer/csv.js';
 import { extractPdfText, parseStatementText, PdfError } from '../importer/pdf.js';
 import { AiError, interpretWithAi } from '../importer/llm.js';
 import { redact } from '../importer/redact.js';
 import { countAiCall, getAiState } from '../services/ai.js';
+import { rememberRule } from '../services/rules.js';
 import type { ParsedRow, TargetKind } from '../importer/types.js';
 import { findOrCreateInvoice, invoiceDatesForDue, syncInvoicePaid } from '../services/invoices.js';
 import { confirmProjectedInstallment, dateInInvoiceCycle, projectInstallments } from '../services/installments.js';
@@ -275,13 +276,14 @@ interface PreviewInput {
 async function enrichPreview({ kind, targetId, rows, skipped, csvInfo, pdfInfo, sourceKind }: PreviewInput) {
   // ----- Enriquecimento: classificação, categorias, duplicatas -----
   const [cats, settings, history, rulesRes] = await Promise.all([
-    pool.query('select id, slug from categories'),
+    pool.query('select id, slug, kind from categories'),
     pool.query(`select value from settings where key = 'own_transfer_names'`),
     pool.query(`select description, category_id from transactions where category_id is not null order by id desc limit 3000`),
     pool.query('select id, kind, pattern, category_id, type, ignore, use_count from learned_rules'),
   ]);
   const rules: LearnedRule[] = rulesRes.rows;
   const catBySlug = new Map<string, number>(cats.rows.map((c) => [c.slug, c.id]));
+  const catKind = new Map<number, string>(cats.rows.map((c) => [c.id, c.kind]));
   const ownNames: string[] = settings.rows[0]?.value ?? [];
   const learned = new Map<string, number>();
   for (const h of history.rows) {
@@ -328,12 +330,19 @@ async function enrichPreview({ kind, targetId, rows, skipped, csvInfo, pdfInfo, 
 
   const out = withHash.map(({ r, hash }, idx) => {
     const sug = suggest({ description: r.description, direction: r.direction, kind, ownNames, rules });
+    // Prioridade: regra exata > histórico idêntico > parecido com o que você já classificou > palavras-chave > IA.
+    const exactCat = sug.category_id ?? learned.get(normalizeText(r.description)) ?? null;
+    const similarOk =
+      !exactCat && sug.similar && ['expense', 'income'].includes(sug.type) &&
+      catKind.get(sug.similar.category_id) === (sug.type === 'income' ? 'income' : 'expense');
+    const similarCat = similarOk ? sug.similar!.category_id : null;
     const category_id =
-      sug.category_id ?? learned.get(normalizeText(r.description)) ??
+      exactCat ?? similarCat ??
       ((sug.category_slug ?? r.ai_category_slug) ? (catBySlug.get((sug.category_slug ?? r.ai_category_slug)!) ?? null) : null);
     let action: Action = sug.skip_by_default ? 'skip' : 'create';
     let duplicate: null | { level: 'exact' | 'possible'; id: number; description: string; date: string | null; status: string } = null;
     let note = sug.note;
+    if (similarCat) note = `Categoria sugerida por semelhança com "${sug.similar!.pattern}" (que você já classificou). Confira.`;
 
     const ex = hash ? exact.get(hash) : undefined;
     if (ex) {
@@ -363,8 +372,9 @@ async function enrichPreview({ kind, targetId, rows, skipped, csvInfo, pdfInfo, 
       type: sug.type,
       category_id,
       learned: sug.learned ?? null,
+      similar: similarCat ? { pattern: sug.similar!.pattern } : null,
       ai: !!r.ai,
-      needs_review: sug.needs_review || !!r.uncertain_reason,
+      needs_review: sug.needs_review || !!r.uncertain_reason || !!similarCat,
       note,
       uncertain_reason: r.uncertain_reason,
       action,
@@ -455,7 +465,7 @@ async function commit(db: PoolClient, b: CommitBody) {
     // Despesa com direção "entrada" é um estorno/crédito: valor negativo, abate o gasto.
     const signed = r.type === 'expense' && r.direction === 'in' ? -r.abs_cents : r.abs_cents;
 
-    if (r.remember) await rememberRule(db, kind, r);
+    if (r.remember) await rememberRule(db, kind, { description: r.description, type: r.type, category_id: r.category_id ?? null });
 
     if (r.action === 'link') {
       if (!r.link_to_id) throw badRequest('Escolha o lançamento a vincular.');
@@ -514,20 +524,6 @@ async function commit(db: PoolClient, b: CommitBody) {
   }
   await db.query('update import_batches set row_count = $2 where id = $1', [batchId, created + linked]);
   return { batch_id: batchId, created, linked, skipped: b.rows.length - created - linked };
-}
-
-/** Grava (ou reforça) a regra do estabelecimento. Só guarda o nome normalizado, a categoria e o tipo. */
-async function rememberRule(db: Queryable, kind: TargetKind, r: CommitRow) {
-  const pattern = merchantKey(r.description);
-  if (!pattern) return;
-  const categoryId = ['expense', 'income'].includes(r.type) ? (r.category_id ?? null) : null;
-  await db.query(
-    `insert into learned_rules (kind, pattern, category_id, type) values ($1, $2, $3, $4)
-     on conflict (kind, pattern) do update
-       set category_id = excluded.category_id, type = excluded.type,
-           use_count = learned_rules.use_count + 1, last_used_at = now()`,
-    [kind, pattern, categoryId, r.type],
-  );
 }
 
 /** Fatura em aberto do cartão cujo valor bate exatamente com o pagamento (mais próxima da data). */

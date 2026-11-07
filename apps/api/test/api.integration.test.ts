@@ -474,6 +474,84 @@ describe.skipIf(!available)('API + PostgreSQL', () => {
     });
   });
 
+  describe('aprendizado: semelhança de nomes e edição em Lançamentos', () => {
+    let accountId: number;
+    let alimentacao: number;
+    let transporte: number;
+    type Row = Record<string, any>;
+    const rulesOf = async () => (await json('GET', '/rules')).body as Row[];
+    const mk = async (description: string, extra: Row = {}) =>
+      (await json('POST', '/transactions', { type: 'expense', description, account_id: accountId, occurred_on: '2026-11-12', total_cents: 5000, ...extra })).body as Row;
+    const previewAccount = async (desc: string) => {
+      const csv = `Data;Histórico;Valor\n12/11/2026;${desc};-12,00`;
+      const r = await upload('/import/preview', { name: 'e.csv', content: csv }, { target_type: 'account', target_id: String(accountId) });
+      expect(r.status).toBe(200);
+      return r.body.rows[0] as Row;
+    };
+
+    it('aprende ao editar a categoria só quando você pede (remember)', async () => {
+      accountId = (await json('POST', '/accounts', { name: 'Conta Semelhança' })).body.id;
+      const cats = (await json('GET', '/categories')).body as { id: number; slug: string }[];
+      alimentacao = cats.find((c) => c.slug === 'alimentacao')!.id;
+      transporte = cats.find((c) => c.slug === 'transporte')!.id;
+
+      const a = await mk('CONFEITARIA DO ZE 123');
+      expect((await json('PATCH', `/transactions/${a.id}`, { category_id: alimentacao })).status).toBe(200);
+      expect((await rulesOf()).filter((r) => r.kind === 'account')).toHaveLength(0);
+
+      const b = await json('PATCH', `/transactions/${a.id}`, { category_id: alimentacao, remember: true });
+      expect(b.status).toBe(200);
+      expect(b.body).not.toHaveProperty('remember');
+      const rule = (await rulesOf()).find((r) => r.kind === 'account');
+      expect(rule).toMatchObject({ pattern: 'confeitaria ze', category_id: alimentacao, type: 'expense' });
+      expect(rule!.pattern).not.toMatch(/\d/);
+    });
+
+    it('nome parecido só é sugerido com 2 regras da mesma categoria; importação marca "parecido com"', async () => {
+      // Com uma regra só, "Confeitaria Doce Lar" (1 de 2 palavras em comum) não ganha categoria.
+      expect((await previewAccount('CONFEITARIA DOCE LAR')).category_id).toBeNull();
+
+      const second = await mk('CONFEITARIA SOL 9');
+      await json('PATCH', `/transactions/${second.id}`, { category_id: alimentacao, remember: true });
+      const row = await previewAccount('CONFEITARIA DOCE LAR');
+      expect(row.category_id).toBe(alimentacao);
+      expect(row.similar).toMatchObject({ pattern: 'confeitaria' });
+      expect(row.needs_review).toBe(true);
+      expect(row.note).toContain('semelhança');
+
+      // Regra exata continua valendo mais que a parecida.
+      const x = await mk('CONFEITARIA DOCE LAR 77');
+      await json('PATCH', `/transactions/${x.id}`, { category_id: transporte, remember: true });
+      const exact = await previewAccount('CONFEITARIA DOCE LAR');
+      expect(exact.category_id).toBe(transporte);
+      expect(exact.learned).toBeTruthy();
+      expect(exact.similar).toBeNull();
+    });
+
+    it('aplica as regras aos antigos sem categoria: dry run não grava e nunca mexe em quem já tem categoria', async () => {
+      const old1 = await mk('CONFEITARIA DOCE LAR 5');
+      const old2 = await mk('CONFEITARIA SOL 88');
+      const withCat = await mk('CONFEITARIA SOL 89', { category_id: transporte });
+      const other = await mk('OFICINA XYZ');
+      const get = async (id: number) => (await json('GET', `/transactions/${id}`)).body as Row;
+
+      const dry = await json('POST', '/rules/apply', { dry_run: true });
+      expect(dry.status).toBe(200);
+      expect(dry.body.matched).toBe(2);
+      expect(dry.body.updated).toBe(0);
+      expect((await get(old1.id)).category_id).toBeNull();
+
+      const real = await json('POST', '/rules/apply', { dry_run: false });
+      expect(real.body).toMatchObject({ matched: 2, updated: 2 });
+      expect((await get(old1.id)).category_id).toBe(transporte); // regra exata "confeitaria doce lar"
+      expect((await get(old2.id)).category_id).toBe(alimentacao); // regra exata "confeitaria sol"
+      expect((await get(withCat.id)).category_id).toBe(transporte); // já tinha categoria
+      expect((await get(other.id)).category_id).toBeNull(); // sem regra
+      expect((await get(old1.id)).manually_edited).toBeFalsy();
+      expect((await json('POST', '/rules/apply', { dry_run: false })).body.matched).toBe(0);
+    });
+  });
+
   describe('IA opcional (Anthropic simulada)', () => {
     let cardId: number;
     const text = 'Titular CPF 123.456.789-01 e-mail eu@exemplo.com\n02/11 MERCADO CENTRAL 120,50\n03/11 LOJA NOVA 45,00\nTotal 165,50';

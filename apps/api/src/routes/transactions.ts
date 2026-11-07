@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
 import { pool, withTx } from '../db.js';
 import { MONTH_RE } from '../lib.js';
 import {
@@ -6,6 +7,7 @@ import {
 } from '../services/transactions.js';
 import { badRequest } from '../errors.js';
 import { detectInstallment, installmentGroup } from '../importer/installments.js';
+import { rememberRule } from '../services/rules.js';
 import { applyToFollowing, deleteFollowing, projectInstallments } from '../services/installments.js';
 
 interface ListQuery {
@@ -83,10 +85,14 @@ export async function transactionRoutes(app: FastifyInstance) {
 
   // scope=following: aplica valor/categoria/divisão às próximas parcelas ainda previstas da mesma compra.
   app.patch<{ Params: { id: string }; Querystring: { scope?: string } }>('/transactions/:id', async (req) => {
-    const patch = txPatchSchema.parse(req.body);
+    // "remember": aprende a categoria escolhida para este estabelecimento (só nome e categoria, nunca valores).
+    const { remember, ...patch } = txPatchSchema.extend({ remember: z.boolean().optional() }).parse(req.body);
     return withTx(async (c) => {
       const tx = await updateTransaction(c, Number(req.params.id), patch, { manual: true });
       if (req.query.scope === 'following') await applyToFollowing(c, tx);
+      if (remember && patch.category_id && ['expense', 'income'].includes(tx.type)) {
+        await rememberRule(c, tx.card_id ? 'card' : 'account', { description: tx.description, type: tx.type, category_id: tx.category_id });
+      }
       return tx;
     });
   });
