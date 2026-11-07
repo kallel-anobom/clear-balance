@@ -24,7 +24,7 @@ src/auth.tsx, supabase.ts, Security.tsx   login e 2FA
 - Dados do servidor com `useQuery` (react-query); escrita com `useMutation`. Depois de qualquer alteração chame `useRefresh()` (invalida tudo).
 - **Os tipos em `api.ts` espelham a resposta da API.** Mudou a API? Atualize o tipo na mesma entrega, senão o `tsc` do build quebra.
 - Valores em centavos na tela também: `MoneyField` recebe e devolve centavos.
-- Estilos em `src/styles.css` (classes simples como `.panel`, `.row`, `.badge`, `.bar`); reutilize antes de criar classe nova. Cores: `var(--good)`, `var(--bad)`, `.neg` para negativo.
+- Estilos em `src/styles.css` (classes simples como `.row`, `.badge`, `.bars`, `.kv`, `.inline-form`); reutilize antes de criar classe nova. Cores: `var(--good)`, `var(--bad)`, `.neg` para negativo.
 - Mostre estado de carregamento (`Loading`), vazio (`Empty`) e erro (`ErrorBox`) em toda consulta.
 - Ações destrutivas pedem `confirm(...)` com o que será afetado. Ações em lote mostram prévia antes (veja "Aplicar aos antigos" em Configurações).
 - Acessibilidade básica: `aria-label` em controles sem texto, barras de progresso com `role="progressbar"`.
