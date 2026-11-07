@@ -28,4 +28,11 @@ export const config = {
   port: Number(process.env.API_PORT ?? 3001),
   // Limite do arquivo importado (15 MB) — extratos e faturas são pequenos.
   maxUploadBytes: 15 * 1024 * 1024,
+  // IA opcional (Anthropic). Sem a chave, o recurso fica indisponível. A chave existe só no servidor.
+  anthropicApiKey: process.env.ANTHROPIC_API_KEY || undefined,
+  anthropicModel: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
+  // Teto de chamadas por mês (controle local; defina também um limite de gasto no console da Anthropic).
+  aiMonthlyLimit: Number(process.env.AI_MONTHLY_LIMIT ?? 60),
+  // Tempo máximo da chamada; precisa ficar abaixo do maxDuration (30 s) da função na Vercel.
+  aiTimeoutMs: Number(process.env.AI_TIMEOUT_MS ?? 25000),
 };

@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api, type PreviewResponse, type PreviewRow, type TxType } from '../api';
+import { api, type AppSettings, type PreviewResponse, type PreviewRow, type TxType } from '../api';
 import { Badge, Empty, ErrorBox, Field, Loading, MoneyField, Panel } from '../components';
 import { TYPE_LABEL, brl, dateBR, todayISO } from '../format';
 import { useLookups, useRefresh } from '../hooks';
@@ -47,6 +47,8 @@ export default function ImportPage({ month }: { month: string }) {
   const [rows, setRows] = useState<Row[]>([]);
   const [invoiceDue, setInvoiceDue] = useState('');
   const [statementTotal, setStatementTotal] = useState<number | null>(null);
+  const settings = useQuery({ queryKey: ['settings'], queryFn: () => api.get<AppSettings>('/settings') });
+  const ai = settings.data?.ai;
   const [result, setResult] = useState<{ created: number; linked: number; skipped: number } | null>(null);
   // Texto lido do arquivo (PDF/OCR): fica na tela para você corrigir e reprocessar sem refazer o OCR.
   const [readText, setReadText] = useState<{ text: string; origin: 'pdf' | 'ocr' } | null>(null);
@@ -62,6 +64,17 @@ export default function ImportPage({ month }: { month: string }) {
   const isPdf = browserRead;
 
   const batches = useQuery({ queryKey: ['import-batches'], queryFn: () => api.get<ImportBatch[]>('/data/imports') });
+
+  // IA opcional: só ao clicar, só com o texto (anonimizado no servidor). Devolve uma proposta para você revisar.
+  const askAi = useMutation({
+    mutationFn: async (text: string) => {
+      if (!target) throw new Error('Escolha a conta ou o cartão.');
+      return api.post<PreviewResponse>('/import/ai-text', {
+        target_type: tType, target_id: Number(tIdStr), ref_month: refMonth, origin: readText?.origin ?? 'ocr', text,
+      });
+    },
+    onSuccess: (p) => { applyPreview(p); refresh(); },
+  });
 
   const applyPreview = (p: PreviewResponse) => {
     setPreview(p);
@@ -272,6 +285,24 @@ export default function ImportPage({ month }: { month: string }) {
               <ErrorBox error={fromText.error} />
             </details>
           )}
+          {readText && preview.pdf?.confidence !== 'ok' && (
+            <div className="ai-box">
+              {ai?.enabled && ai.available ? (
+                <>
+                  <button
+                    className="btn" disabled={askAi.isPending || ai.calls >= ai.limit || !editText.trim()}
+                    onClick={() => confirm('Enviar o texto lido (sem CPF, e-mail, telefones e números de conta) à Anthropic para tentar interpretar com IA? A IA só propõe: você revisa tudo antes de salvar.') && askAi.mutate(editText)}
+                  >
+                    {askAi.isPending ? 'Consultando a IA…' : 'Tentar com IA'}
+                  </button>
+                  <span className="muted small">Usos neste mês: {ai.calls} de {ai.limit}. As linhas vêm desmarcadas; confira cada valor.</span>
+                </>
+              ) : (
+                <span className="muted small">Não conseguiu ler direito? Em <Link to="/configuracoes">Configurações</Link> você pode ligar a IA opcional como leitor de reserva.</span>
+              )}
+              <ErrorBox error={askAi.error} />
+            </div>
+          )}
           {preview.pdf?.confidence === 'ok' && preview.pdf.warnings.length > 0 && <div className="alert warn">{preview.pdf.warnings.join(' ')}</div>}
           {preview.pdf?.reconciliation_cents === 0 && <div className="alert good small">A soma das linhas confere com o total da fatura lido no PDF ({brl(preview.pdf.detected_total_cents)}).</div>}
 
@@ -342,6 +373,7 @@ export default function ImportPage({ month }: { month: string }) {
                   )}
                 </div>
                 <div className="import-notes">
+                  {r.ai && <Badge tone="warn" title="Linha proposta pela IA: confira data, valor e entrada/saída com o extrato.">IA: conferir</Badge>}
                   {r.learned && <Badge tone="info" title="Classificação lembrada de correções anteriores. Gerencie em Configurações › Regras aprendidas.">aprendida ({r.learned.uses}×)</Badge>}
                   {r.installment && <Badge tone="info" title="Compra parcelada">parcela {r.installment.no}/{r.installment.total}</Badge>}
                   {r.uncertain_reason && <Badge tone="warn">conferir: {r.uncertain_reason}</Badge>}

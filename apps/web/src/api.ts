@@ -9,6 +9,8 @@ export class ApiError extends Error {
 /** Mensagem clara para quem usa; o servidor nunca devolve conteúdo de extratos nos erros. */
 function friendly(status: number, serverMessage?: string): string {
   if (status === 401) return 'Sua sessão expirou. Clique em Sair e entre de novo.';
+  // Mensagens da IA opcional já vêm claras do servidor (limite do mês, chave ausente, tempo esgotado...).
+  if (serverMessage && /\b(IA|Anthropic)\b/.test(serverMessage)) return serverMessage;
   if (status === 403) return serverMessage ?? 'Este usuário não tem permissão (e-mail fora da lista permitida ou verificação em duas etapas pendente).';
   if (status === 413) return serverMessage ?? 'O arquivo ou texto é grande demais. Envie menos imagens por vez.';
   if (status === 429) return 'Muitas requisições em pouco tempo. Aguarde um minuto e tente de novo.';
@@ -167,10 +169,14 @@ export interface PreviewRow {
   action: 'create' | 'skip' | 'link'; hash: string | null;
   duplicate: null | { level: 'exact' | 'possible'; id: number; description: string; date: string | null; status: string };
   learned?: { id: number; uses: number } | null;
+  ai?: boolean;
   // preenchidos na tela
   transfer_account_id?: number | null; card_id?: number | null;
   installment?: { no: number; total: number; bare: boolean } | null;
 }
+export interface AiSettings { enabled: boolean; available: boolean; month: string; calls: number; limit: number; model: string }
+export interface AppSettings { own_transfer_names: string[]; ai: AiSettings }
+
 export interface LearnedRule {
   id: number; kind: 'account' | 'card'; pattern: string; category_id: number | null; category_name: string | null;
   type: TxType | null; ignore: boolean; use_count: number; created_at: string; last_used_at: string;
@@ -183,7 +189,7 @@ export interface PreviewResponse {
   pdf: null | {
     confidence: 'ok' | 'low' | 'none'; candidate_lines: number; parsed_lines: number;
     detected_due_date: string | null; detected_total_cents: number | null; reconciliation_cents: number | null; warnings: string[];
-    stats?: { lines: number; lines_with_money: number; date_headers: number; reader: 'classic' | 'app' };
+    stats?: { lines: number; lines_with_money: number; date_headers: number; reader: 'classic' | 'app' | 'ai' };
   };
   rows: PreviewRow[];
 }

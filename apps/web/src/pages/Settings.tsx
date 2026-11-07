@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
-import { api, type Account, type LearnedRule, type Recurring, type TxType } from '../api';
+import { api, type Account, type AppSettings, type LearnedRule, type Recurring, type TxType } from '../api';
 import { Badge, Empty, ErrorBox, Field, Loading, Modal, MoneyField, Panel } from '../components';
 import { brl, dateBR, monthShort, todayISO } from '../format';
 import { useLookups, useRefresh } from '../hooks';
@@ -190,13 +190,40 @@ function RulesPanel() {
   );
 }
 
+/** IA opcional (leitor de reserva da importação). Desligada por padrão; a chave existe só no servidor. */
+function AiPanel() {
+  const refresh = useRefresh();
+  const settings = useQuery({ queryKey: ['settings'], queryFn: () => api.get<AppSettings>('/settings') });
+  const toggle = useMutation({ mutationFn: (v: boolean) => api.put('/settings', { ai_enabled: v }), onSuccess: refresh });
+  const ai = settings.data?.ai;
+  return (
+    <Panel title="IA (opcional)">
+      <p className="muted small">
+        Quando o leitor automático não entende um extrato, você pode pedir ajuda ao Claude (Anthropic) pelo botão <strong>Tentar com IA</strong> na importação. Só então o <strong>texto</strong> do extrato é enviado, nunca o arquivo, e antes disso o servidor troca CPF/CNPJ, e-mails, telefones e números de conta ou cartão por marcadores. Nomes de estabelecimentos (e de pessoas, em PIX) seguem no texto. A IA apenas propõe linhas desmarcadas: você revisa tudo antes de salvar.
+      </p>
+      {!ai ? <Loading /> : (
+        <>
+          <label className="check">
+            <input type="checkbox" checked={ai.enabled} disabled={!ai.available || toggle.isPending} onChange={(e) => toggle.mutate(e.target.checked)} /> Ligar a IA como leitor de reserva
+          </label>
+          <p className="small">
+            {ai.available ? <Badge tone="good">chave configurada no servidor</Badge> : <Badge tone="warn">sem chave: defina ANTHROPIC_API_KEY no servidor (Vercel) e faça redeploy</Badge>}
+            {' '}Usos neste mês: <strong>{ai.calls}</strong> de {ai.limit}.
+          </p>
+        </>
+      )}
+      <ErrorBox error={toggle.error} />
+    </Panel>
+  );
+}
+
 export default function SettingsPage() {
   const { accounts } = useLookups();
   const refresh = useRefresh();
   const [acc, setAcc] = useState<{ account?: Account } | null>(null);
   const [rec, setRec] = useState<{ item?: Recurring } | null>(null);
   const recurring = useQuery({ queryKey: ['recurring'], queryFn: () => api.get<Recurring[]>('/recurring') });
-  const settings = useQuery({ queryKey: ['settings'], queryFn: () => api.get<{ own_transfer_names: string[] }>('/settings') });
+  const settings = useQuery({ queryKey: ['settings'], queryFn: () => api.get<AppSettings>('/settings') });
   const summary = useQuery({ queryKey: ['summary'], queryFn: () => api.get<Record<string, number>>('/data/summary') });
   const [names, setNames] = useState<string | null>(null);
   const [confirmText, setConfirmText] = useState('');
@@ -271,10 +298,13 @@ export default function SettingsPage() {
 
       <RulesPanel />
 
+      <AiPanel />
+
       <Panel title="Privacidade e dados">
         <ul className="plain">
           <li>Os dados ficam no <strong>PostgreSQL</strong> (local, ou no seu projeto Supabase quando hospedado) e só são acessíveis depois do login. Nenhum dado é enviado a serviços de terceiros além do seu próprio banco.</li>
           <li>O sistema <strong>não guarda</strong> senhas bancárias, tokens, CVV nem número completo de cartão (apenas os 4 últimos dígitos, se você informar).</li>
+          <li>A <strong>IA opcional</strong> fica desligada até você ligar; ao usá-la, só o texto anonimizado do extrato vai à Anthropic.</li>
           <li>As <strong>regras aprendidas</strong> guardam só o nome do estabelecimento e a classificação que você escolheu, nunca valores, datas ou o texto do extrato.</li>
           <li>Arquivos importados (CSV/PDF) não são armazenados e o conteúdo deles não vai para os logs; só os lançamentos aprovados são salvos.</li>
         </ul>

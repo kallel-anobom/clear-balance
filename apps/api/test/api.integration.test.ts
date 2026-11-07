@@ -1,6 +1,6 @@
 import { SignJWT, generateKeyPair } from 'jose';
 import pg from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 /**
  * Teste de ponta a ponta contra um PostgreSQL real, em um banco separado (clearbalance_test).
@@ -471,6 +471,88 @@ describe.skipIf(!available)('API + PostgreSQL', () => {
       const ok = await json('POST', '/rules', { kind: 'card', pattern: 'Loja Do Bairro 99', category_id: mercado });
       expect(ok.status).toBe(201);
       expect(ok.body.pattern).toBe('loja bairro');
+    });
+  });
+
+  describe('IA opcional (Anthropic simulada)', () => {
+    let cardId: number;
+    const text = 'Titular CPF 123.456.789-01 e-mail eu@exemplo.com\n02/11 MERCADO CENTRAL 120,50\n03/11 LOJA NOVA 45,00\nTotal 165,50';
+    const call = () => json('POST', '/import/ai-text', { target_type: 'card', target_id: cardId, ref_month: '2026-11', origin: 'ocr', text });
+    const aiReply = (lancamentos: unknown[]) => new Response(JSON.stringify({ content: [{ type: 'tool_use', name: 'registrar_lancamentos', input: { lancamentos } }] }), { status: 200 });
+    const good = [
+      { date: '2026-11-02', description: 'MERCADO CENTRAL', amount_cents: 12050, direction: 'out', category_slug: 'mercado' },
+      { date: '2026-11-03', description: 'LOJA NOVA', amount_cents: 4500, direction: 'out', category_slug: 'compras' },
+    ];
+    let config: Awaited<typeof import('../src/config.js')>['config'];
+    const original = {} as Record<string, unknown>;
+
+    beforeAll(async () => {
+      ({ config } = await import('../src/config.js'));
+      Object.assign(original, { key: config.anthropicApiKey, limit: config.aiMonthlyLimit });
+    });
+    afterAll(() => {
+      vi.unstubAllGlobals();
+      config.anthropicApiKey = original.key as string | undefined;
+      config.aiMonthlyLimit = original.limit as number;
+    });
+
+    it('vem desligada e exige chave no servidor; nunca chama a rede nesses casos', async () => {
+      cardId = (await json('POST', '/cards', { name: 'Cartão IA', last4: '2222', closing_day: 25, due_day: 5 })).body.id;
+      const net = vi.fn();
+      vi.stubGlobal('fetch', net);
+      expect((await json('GET', '/settings')).body.ai).toMatchObject({ enabled: false, calls: 0 });
+      expect((await call()).status).toBe(403);
+
+      expect((await json('PUT', '/settings', { ai_enabled: true })).status).toBe(200);
+      config.anthropicApiKey = undefined;
+      expect((await json('GET', '/settings')).body.ai).toMatchObject({ enabled: true, available: false });
+      expect((await call()).status).toBe(503);
+      expect(net).not.toHaveBeenCalled();
+      expect((await json('GET', '/settings')).body.ai.calls).toBe(0);
+    });
+
+    it('propõe linhas desmarcadas, anonimiza o texto e conta o uso; a chave nunca aparece', async () => {
+      config.anthropicApiKey = 'sk-ant-segredo';
+      config.aiMonthlyLimit = 3;
+      const net = vi.fn(async () => aiReply(good));
+      vi.stubGlobal('fetch', net);
+
+      const r = await call();
+      expect(r.status).toBe(200);
+      expect(r.body.pdf).toMatchObject({ confidence: 'low', stats: { reader: 'ai' } });
+      expect(r.body.pdf.warnings.join(' ')).toContain('IA');
+      expect(r.body.rows).toHaveLength(2);
+      for (const row of r.body.rows) expect(row).toMatchObject({ ai: true, action: 'skip' }); // nada entra sem revisão
+      const cats = (await json('GET', '/categories')).body as { id: number; slug: string }[];
+      expect(r.body.rows[0].category_id).toBe(cats.find((c) => c.slug === 'mercado')!.id);
+
+      const sent = ((net.mock.calls[0] as unknown[])[1] as RequestInit).body as string;
+      expect(sent).toContain('[CPF]');
+      expect(sent).toContain('[EMAIL]');
+      expect(sent).not.toMatch(/123\.456\.789|exemplo\.com/);
+      expect(JSON.stringify((await json('GET', '/settings')).body)).not.toContain('sk-ant');
+      expect((await json('GET', '/settings')).body.ai).toMatchObject({ calls: 1, limit: 3 });
+
+      // Nada foi gravado: só a revisão e o commit do usuário criam lançamentos.
+      expect((await json('GET', '/transactions?q=LOJA NOVA')).body).toHaveLength(0);
+    });
+
+    it('resposta inválida ou valor inventado não importa nada, e o uso é contado', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ content: [{ type: 'text', text: 'oi' }] }), { status: 200 })));
+      expect((await call()).status).toBe(502);
+      vi.stubGlobal('fetch', vi.fn(async () => aiReply([{ ...good[0], amount_cents: 99900 }, { ...good[1], amount_cents: 88800 }])));
+      expect((await call()).status).toBe(422);
+      expect((await json('GET', '/settings')).body.ai.calls).toBe(3);
+    });
+
+    it('respeita o limite mensal sem chamar a rede', async () => {
+      const net = vi.fn();
+      vi.stubGlobal('fetch', net);
+      const r = await call();
+      expect(r.status).toBe(429);
+      expect(r.body.error).toContain('Limite');
+      expect(net).not.toHaveBeenCalled();
+      expect((await json('PUT', '/settings', { ai_enabled: false })).status).toBe(200);
     });
   });
 

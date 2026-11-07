@@ -9,6 +9,9 @@ import { fingerprint, merchantKey, suggest, type LearnedRule } from '../importer
 import { detectInstallment, installmentGroup } from '../importer/installments.js';
 import { parseCsv, type CsvMapping } from '../importer/csv.js';
 import { extractPdfText, parseStatementText, PdfError } from '../importer/pdf.js';
+import { AiError, interpretWithAi } from '../importer/llm.js';
+import { redact } from '../importer/redact.js';
+import { countAiCall, getAiState } from '../services/ai.js';
 import type { ParsedRow, TargetKind } from '../importer/types.js';
 import { findOrCreateInvoice, invoiceDatesForDue, syncInvoicePaid } from '../services/invoices.js';
 import { confirmProjectedInstallment, dateInInvoiceCycle, projectInstallments } from '../services/installments.js';
@@ -183,6 +186,73 @@ export async function importRoutes(app: FastifyInstance) {
     });
   });
 
+  // Leitor de reserva com IA (opcional, só ao clicar). Recebe o texto, anonimiza e devolve uma PROPOSTA:
+  // as linhas chegam desmarcadas e o usuário revisa tudo antes de salvar.
+  app.post('/import/ai-text', async (req) => {
+    const b = previewTextBody.parse(req.body);
+    const kind: TargetKind = b.target_type;
+    const targetTable = kind === 'card' ? 'cards' : 'accounts';
+    const exists = await pool.query(`select 1 from ${targetTable} where id = $1`, [b.target_id]);
+    if (!exists.rowCount) throw badRequest(kind === 'card' ? 'Cartão não encontrado.' : 'Conta não encontrada.');
+
+    const state = await getAiState(pool);
+    if (!state.enabled) throw new HttpError(403, 'A IA está desligada. Ligue em Configurações › IA (opcional).');
+    if (!state.available) throw new HttpError(503, 'A IA não está configurada no servidor (falta a chave da Anthropic).');
+    if (state.calls >= state.limit) {
+      throw new HttpError(429, `Limite de ${state.limit} usos da IA neste mês atingido. Use a revisão manual ou espere o próximo mês.`);
+    }
+
+    const [cats, ruleRows] = await Promise.all([
+      pool.query('select slug, name, kind from categories order by kind desc, name'),
+      pool.query(
+        `select r.pattern, c.slug from learned_rules r join categories c on c.id = r.category_id
+         where r.kind = $1 order by r.use_count desc, r.last_used_at desc limit 10`,
+        [kind],
+      ),
+    ]);
+
+    await countAiCall(pool, state);
+    let ai;
+    try {
+      ai = await interpretWithAi(redact(b.text), {
+        apiKey: config.anthropicApiKey,
+        model: config.anthropicModel,
+        kind,
+        refMonth: b.ref_month,
+        categories: cats.rows,
+        examples: ruleRows.rows.map((r) => ({ merchant: r.pattern, category_slug: r.slug })),
+        timeoutMs: config.aiTimeoutMs,
+      });
+    } catch (e) {
+      if (e instanceof AiError) throw new HttpError(e.status, e.message);
+      throw e;
+    }
+
+    // Vencimento e total da fatura vêm do leitor de regras (se achar), para conferir a soma da IA.
+    const classic = parseStatementText(b.text, { kind, refMonth: b.ref_month, ocr: true });
+    const warnings = [...ai.warnings];
+    let reconciliation: number | null = null;
+    if (kind === 'card' && classic.detected_total_cents !== null) {
+      const net = ai.rows.reduce((s, r) => s + (r.direction === 'out' ? r.abs_cents : -r.abs_cents), 0);
+      reconciliation = classic.detected_total_cents - net;
+      if (reconciliation !== 0) warnings.push('A soma das linhas da IA não bate com o total da fatura lido no texto. Confira cada linha.');
+    }
+    const lines = b.text.split('\n');
+    return enrichPreview({
+      kind, targetId: b.target_id, rows: ai.rows, skipped: 0, csvInfo: null, sourceKind: b.origin === 'ocr' ? 'image' : 'pdf',
+      pdfInfo: {
+        confidence: 'low',
+        candidate_lines: ai.rows.length,
+        parsed_lines: ai.rows.length,
+        detected_due_date: classic.detected_due_date,
+        detected_total_cents: classic.detected_total_cents,
+        reconciliation_cents: reconciliation,
+        warnings,
+        stats: { lines: lines.length, lines_with_money: classic.stats.lines_with_money, date_headers: 0, reader: 'ai' },
+      },
+    });
+  });
+
   app.post('/import/commit', async (req, reply) => {
     const b = commitBody.parse(req.body);
     const result = await withTx((c) => commit(c, b));
@@ -259,7 +329,8 @@ async function enrichPreview({ kind, targetId, rows, skipped, csvInfo, pdfInfo, 
   const out = withHash.map(({ r, hash }, idx) => {
     const sug = suggest({ description: r.description, direction: r.direction, kind, ownNames, rules });
     const category_id =
-      sug.category_id ?? learned.get(normalizeText(r.description)) ?? (sug.category_slug ? (catBySlug.get(sug.category_slug) ?? null) : null);
+      sug.category_id ?? learned.get(normalizeText(r.description)) ??
+      ((sug.category_slug ?? r.ai_category_slug) ? (catBySlug.get((sug.category_slug ?? r.ai_category_slug)!) ?? null) : null);
     let action: Action = sug.skip_by_default ? 'skip' : 'create';
     let duplicate: null | { level: 'exact' | 'possible'; id: number; description: string; date: string | null; status: string } = null;
     let note = sug.note;
@@ -292,6 +363,7 @@ async function enrichPreview({ kind, targetId, rows, skipped, csvInfo, pdfInfo, 
       type: sug.type,
       category_id,
       learned: sug.learned ?? null,
+      ai: !!r.ai,
       needs_review: sug.needs_review || !!r.uncertain_reason,
       note,
       uncertain_reason: r.uncertain_reason,

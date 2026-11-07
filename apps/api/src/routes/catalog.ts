@@ -1,3 +1,4 @@
+import { getAiState, setAiEnabled } from '../services/ai.js';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { pool } from '../db.js';
@@ -97,15 +98,21 @@ export async function catalogRoutes(app: FastifyInstance) {
   app.get('/settings', async () => {
     const { rows } = await pool.query('select key, value from settings');
     const s = Object.fromEntries(rows.map((r) => [r.key, r.value]));
-    return { own_transfer_names: s.own_transfer_names ?? [] };
+    return { own_transfer_names: s.own_transfer_names ?? [], ai: await getAiState(pool) };
   });
   app.put('/settings', async (req) => {
-    const b = z.object({ own_transfer_names: z.array(z.string().trim().min(2).max(80)).max(20) }).parse(req.body);
-    await pool.query(
-      `insert into settings (key, value) values ('own_transfer_names', $1)
-       on conflict (key) do update set value = excluded.value`,
-      [JSON.stringify(b.own_transfer_names)],
-    );
+    const b = z.object({
+      own_transfer_names: z.array(z.string().trim().min(2).max(80)).max(20).optional(),
+      ai_enabled: z.boolean().optional(),
+    }).parse(req.body);
+    if (b.own_transfer_names) {
+      await pool.query(
+        `insert into settings (key, value) values ('own_transfer_names', $1)
+         on conflict (key) do update set value = excluded.value`,
+        [JSON.stringify(b.own_transfer_names)],
+      );
+    }
+    if (b.ai_enabled !== undefined) await setAiEnabled(pool, b.ai_enabled);
     return b;
   });
 }
