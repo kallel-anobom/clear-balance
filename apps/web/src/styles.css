@@ -98,6 +98,9 @@ main { min-width: 0; }
 .bar-head { display: flex; justify-content: space-between; font-size: 0.9rem; }
 .bar { display: flex; height: 8px; background: #edf1f4; border-radius: 99px; overflow: hidden; margin: 4px 0; }
 .bar-real { background: var(--primary); }
+.bar-budget { background: var(--good); transition: width .2s; }
+.bar-budget.near { background: #e0a526; }
+.bar-budget.over { background: var(--bad); }
 .bar-plan { background: repeating-linear-gradient(45deg, #7cc2bb, #7cc2bb 4px, #bfe0dc 4px, #bfe0dc 8px); }
 
 /* ---------- Lançamentos ---------- */

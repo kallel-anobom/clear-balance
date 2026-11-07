@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import { api, qs, type FlowItem, type Overview } from '../api';
 import { Badge, Empty, ErrorBox, Loading, Panel } from '../components';
 import { brl, dateBR, monthLabel, monthShort } from '../format';
+import { ComparePanel, SubscriptionsPanel } from '../Insights';
 import { MarkPaid } from '../MarkPaid';
 
 function FlowRow({ item, onPay, month }: { item: FlowItem; onPay: (i: FlowItem) => void; month: string }) {
@@ -92,7 +93,7 @@ export default function OverviewPage({ month }: { month: string }) {
   const f = o.forecast;
   const pending = o.cash.items.filter((i) => i.status === 'pending');
   const paid = o.cash.items.filter((i) => i.status === 'paid');
-  const maxCat = Math.max(1, ...o.spending.by_category.map((c) => c.realized_cents + c.planned_cents));
+  const maxCat = Math.max(1, ...o.spending.by_category.map((c) => c.used_cents));
   const hasShared = o.spending.realized_total_cents !== o.spending.realized_mine_cents;
 
   return (
@@ -226,14 +227,32 @@ export default function OverviewPage({ month }: { month: string }) {
         </Panel>
       )}
 
+      <ComparePanel month={month} />
+
+      <SubscriptionsPanel month={month} />
+
       <div className="grid2">
-        <Panel title="Gasto por categoria (minha parte)">
+        <Panel title="Gasto por categoria (minha parte)" action={o.spending.budget_summary.count > 0 ? <span className="muted small">{o.spending.budget_summary.over_count > 0 ? `${o.spending.budget_summary.over_count} estourada${o.spending.budget_summary.over_count > 1 ? 's' : ''}` : o.spending.budget_summary.near_count > 0 ? `${o.spending.budget_summary.near_count} perto do limite` : 'dentro do orçamento'}</span> : undefined}>
           {o.spending.by_category.length === 0 ? <Empty>Sem despesas neste mês.</Empty> : (
             <ul className="bars">
               {o.spending.by_category.map((c) => (
                 <li key={c.name}>
-                  <div className="bar-head"><span>{c.name}</span><strong>{brl(c.realized_cents + c.planned_cents)}</strong></div>
-                  <div className="bar"><div className="bar-real" style={{ width: `${(c.realized_cents / maxCat) * 100}%` }} /><div className="bar-plan" style={{ width: `${(c.planned_cents / maxCat) * 100}%` }} /></div>
+                  <div className="bar-head">
+                    <span>{c.name}{c.status === 'over' && <> <Badge tone="bad">estourou</Badge></>}{c.status === 'near' && <> <Badge tone="warn">quase no limite</Badge></>}</span>
+                    <strong>{brl(c.used_cents)}{c.budget_cents !== null && <span className="muted"> de {brl(c.budget_cents)}</span>}</strong>
+                  </div>
+                  {c.budget_cents !== null ? (
+                    <div className="bar" role="progressbar" aria-label={`Orçamento de ${c.name}`} aria-valuemin={0} aria-valuemax={c.budget_cents} aria-valuenow={Math.min(c.used_cents, c.budget_cents)}>
+                      <div className={`bar-budget ${c.status ?? ''}`} style={{ width: `${Math.min(100, (c.used_cents / c.budget_cents) * 100)}%` }} />
+                    </div>
+                  ) : (
+                    <div className="bar"><div className="bar-real" style={{ width: `${(c.realized_cents / maxCat) * 100}%` }} /><div className="bar-plan" style={{ width: `${(c.planned_cents / maxCat) * 100}%` }} /></div>
+                  )}
+                  {c.budget_cents !== null && c.remaining_cents !== null && (
+                    <div className={`small ${c.remaining_cents < 0 ? 'neg' : 'muted'}`}>
+                      {c.remaining_cents < 0 ? `passou ${brl(-c.remaining_cents)} do limite` : `restam ${brl(c.remaining_cents)}`}
+                    </div>
+                  )}
                   {c.planned_cents > 0 && <div className="muted small">realizado {brl(c.realized_cents)} · previsto {brl(c.planned_cents)}</div>}
                 </li>
               ))}

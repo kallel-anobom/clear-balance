@@ -117,11 +117,35 @@ export interface FlowItem {
   tx_id: number | null; invoice_id: number | null;
 }
 
+export type BudgetStatus = 'ok' | 'near' | 'over';
+export interface Budget { category_id: number; category_name: string; category_slug: string; limit_cents: number }
+
+export interface CategoryComparison {
+  category_id: number | null; name: string; current_cents: number; avg_cents: number; diff_cents: number; diff_pct: number | null;
+}
+export interface CostComparison {
+  month: string; available: boolean; current_cents: number; months_used: string[]; partial: boolean;
+  avg_cents: number; diff_cents: number; diff_pct: number | null;
+  categories: CategoryComparison[]; top_increases: CategoryComparison[];
+}
+
+export interface Subscription {
+  merchant: string; description: string; typical_cents: number; last_cents: number; last_month: string; months: string[];
+  months_count: number; price_change_cents: number; price_change_pct: number | null; yearly_estimate_cents: number;
+  draft: { description: string; total_cents: number; category_id: number | null; account_id: number | null; day_of_month: number | null };
+}
+export interface SubscriptionsResponse { window_months: number; total_monthly_cents: number; items: Subscription[] }
+
 export interface Overview {
   month: string; today: string;
   spending: {
     realized_mine_cents: number; realized_total_cents: number; planned_mine_cents: number; planned_total_cents: number;
-    planned_estimated_count: number; by_category: { name: string; realized_cents: number; planned_cents: number }[];
+    planned_estimated_count: number;
+    by_category: {
+      category_id: number | null; name: string; realized_cents: number; planned_cents: number; used_cents: number;
+      budget_cents: number | null; remaining_cents: number | null; status: BudgetStatus | null;
+    }[];
+    budget_summary: { count: number; total_limit_cents: number; total_used_cents: number; near_count: number; over_count: number };
     /** Custo total do mês (competência, minha parte): já pago + ainda previsto. */
     total_mine_cents: number; estimated_count: number;
     breakdown: { key: string; label: string; hint: string; count: number; paid_cents: number; planned_cents: number; total_cents: number; projected_count: number }[];
