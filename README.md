@@ -129,12 +129,21 @@ Quando o leitor automático não entende um extrato, o botão **Tentar com IA** 
 - **Como ligar (produção):** crie a chave no console da Anthropic (com limite de gasto), adicione `ANTHROPIC_API_KEY` em *Vercel → Settings → Environment Variables* (opcionalmente `ANTHROPIC_MODEL` e `AI_MONTHLY_LIMIT`) e faça redeploy. Nunca coloque a chave no repositório ou no front-end. Localmente, use o `.env`.
 - **Testes e CI** nunca chamam a API real (a chamada é simulada). Não há migração de banco: o interruptor e o contador ficam na tabela `settings`.
 
+#### Resumo do mês com IA
+
+Com a IA ligada, a *Visão do mês* ganha o painel **Resumo do mês com IA** (`POST /api/overview/summary?month=AAAA-MM`, só ao clicar).
+
+- **O que é enviado:** só **agregados já calculados no servidor**: custo total, já gasto/previsto, salário líquido, sobra ou falta, as 6 maiores categorias (nome e valor), orçamentos estourados ou quase no limite, comparação com a média dos meses anteriores, os maiores aumentos por categoria, e a **quantidade e o total** das assinaturas detectadas. **Nunca** descrições de lançamentos, datas, nomes de estabelecimentos, contas ou cartões. A tela mostra *O que foi enviado à IA* com a lista exata.
+- **Números do servidor:** a IA só escreve o texto, usando os valores já formatados. Todo valor, percentual ou número citado no texto precisa existir na lista enviada; se a IA citar qualquer número que não esteja lá (ou uma data), o resumo é **descartado** e nada é mostrado.
+- **Limites:** cada resumo conta 1 uso do mesmo limite mensal (`AI_MONTHLY_LIMIT`), inclusive quando a resposta é descartada. Nada é gravado no banco; o texto fica só na tela.
+- **Sugestões** são só de organização (revisar categoria, assinatura ou limite), nunca de investimento ou crédito.
+
 ## Privacidade e dados
 
 - **Local:** dados somente no PostgreSQL do seu computador (volume Docker `clear_balance_pgdata`), que só escuta em `127.0.0.1`. **Hospedado:** dados no **seu** projeto Supabase, acessíveis só depois do login e da checagem do seu e-mail na API; nenhum outro serviço recebe seus dados (o OCR roda no navegador), exceto se você ligar a IA opcional.
 - **Não são armazenados:** senhas bancárias, tokens, CVV, número completo de cartão (apenas os 4 últimos dígitos, se informados) nem os arquivos importados — só os lançamentos aprovados na revisão.
 - A API não registra corpo de requisições nem conteúdo de extratos/PDFs em logs (nível `warn`, erros sem detalhes do banco).
-- **IA opcional:** desligada por padrão; se ligada, só o texto anonimizado do extrato vai à Anthropic, a seu pedido (veja *IA opcional*).
+- **IA opcional:** desligada por padrão; se ligada, só o texto anonimizado do extrato (importação) ou totais por categoria (resumo do mês) vão à Anthropic, a seu pedido (veja *IA opcional*).
 - **Regras aprendidas** guardam apenas nome de estabelecimento e classificação (veja *Aprendizado local*).
 - **Apagar:** *Importação → Apagar importação*, *Configurações → Apagar tudo que foi importado* e *Apagar todos os dados* (exige digitar `APAGAR TUDO`).
 

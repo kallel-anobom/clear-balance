@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { api, qs, type CostComparison, type Subscription, type SubscriptionsResponse } from './api';
+import { api, qs, type AppSettings, type CostComparison, type MonthSummary, type Subscription, type SubscriptionsResponse } from './api';
 import { Badge, Empty, ErrorBox, Loading, Panel } from './components';
 import { brl, addMonths, monthShort } from './format';
 import { useRefresh } from './hooks';
@@ -97,6 +97,51 @@ export function SubscriptionsPanel({ month }: { month: string }) {
         Encontradas nos seus lançamentos: mesmo estabelecimento, valor parecido, 3 meses seguidos ou mais. Parcelas e o que já é recorrência não aparecem aqui. Confira se ainda usa cada uma.
       </p>
       <ul className="rows">{items.map((s) => <SubscriptionRow key={s.merchant} s={s} nextMonth={nextMonth} />)}</ul>
+    </Panel>
+  );
+}
+
+/** Resumo do mês escrito por IA. Só aparece com a IA ligada; a IA recebe apenas totais já calculados, nunca descrições. */
+export function SummaryPanel({ month }: { month: string }) {
+  const refresh = useRefresh();
+  const settings = useQuery({ queryKey: ['settings'], queryFn: () => api.get<AppSettings>('/settings') });
+  const gen = useMutation({
+    mutationFn: () => api.post<MonthSummary>(`/overview/summary${qs({ month })}`),
+    // Atualiza o contador de usos da IA (o resumo em si fica só nesta tela).
+    onSettled: () => refresh(),
+  });
+  const ai = settings.data?.ai;
+  if (!ai?.enabled || !ai.available) return null;
+  const left = Math.max(0, ai.limit - ai.calls);
+  const r = gen.data && gen.data.month === month ? gen.data : null;
+  return (
+    <Panel title="Resumo do mês com IA" action={<span className="muted small">{ai.calls} de {ai.limit} usos da IA neste mês</span>}>
+      {!r && (
+        <>
+          <p className="muted small">
+            A IA escreve um resumo curto a partir de <strong>totais por categoria, orçamento e comparação com os meses anteriores</strong>. Não são enviados descrições de lançamentos, datas, nomes de estabelecimentos, contas ou cartões. Os números são calculados pelo sistema e o texto é descartado se citar algum valor que não esteja nos seus dados. Cada resumo conta 1 uso do limite mensal.
+          </p>
+          <div className="inline-form">
+            <button className="btn primary" disabled={gen.isPending || left === 0} onClick={() => gen.mutate()}>
+              {gen.isPending ? 'Gerando…' : left === 0 ? 'Limite de usos atingido' : 'Gerar resumo do mês'}
+            </button>
+          </div>
+        </>
+      )}
+      <ErrorBox error={gen.error} />
+      {r && (
+        <>
+          <p>{r.resumo}</p>
+          {r.destaques.length > 0 && <><h4 className="subhead">Destaques</h4><ul className="plain">{r.destaques.map((d) => <li key={d}>{d}</li>)}</ul></>}
+          {r.sugestoes.length > 0 && <><h4 className="subhead">Sugestões</h4><ul className="plain">{r.sugestoes.map((d) => <li key={d}>{d}</li>)}</ul></>}
+          <p className="muted small">Texto escrito por IA ({r.model}) a partir de números calculados pelo sistema. Confira com os lançamentos antes de decidir algo.</p>
+          <details>
+            <summary className="muted small">O que foi enviado à IA</summary>
+            <ul className="kv">{r.facts.map((f) => <li key={f.label}><span>{f.label}</span><strong>{f.value}</strong></li>)}</ul>
+          </details>
+          <div className="inline-form"><button className="btn small" onClick={() => gen.reset()}>Fechar</button></div>
+        </>
+      )}
     </Panel>
   );
 }

@@ -200,6 +200,9 @@ export interface PreviewRow {
   installment?: { no: number; total: number; bare: boolean } | null;
 }
 export interface AiSettings { enabled: boolean; available: boolean; month: string; calls: number; limit: number; model: string }
+export interface MonthSummary {
+  month: string; model: string; resumo: string; destaques: string[]; sugestoes: string[]; facts: { label: string; value: string }[];
+}
 export interface AppSettings { own_transfer_names: string[]; ai: AiSettings }
 
 export interface ApplyResult {

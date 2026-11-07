@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { api, qs, type FlowItem, type Overview } from '../api';
 import { Badge, Empty, ErrorBox, Loading, Panel } from '../components';
 import { brl, dateBR, monthLabel, monthShort } from '../format';
-import { ComparePanel, SubscriptionsPanel } from '../Insights';
+import { ComparePanel, SubscriptionsPanel, SummaryPanel } from '../Insights';
 import { MarkPaid } from '../MarkPaid';
 
 function FlowRow({ item, onPay, month }: { item: FlowItem; onPay: (i: FlowItem) => void; month: string }) {
@@ -226,6 +226,8 @@ export default function OverviewPage({ month }: { month: string }) {
           <p className="muted small">Parcelas projetadas são estimativas (mesmo valor da parcela anterior) até aparecerem na fatura.</p>
         </Panel>
       )}
+
+      <SummaryPanel key={month} month={month} />
 
       <ComparePanel month={month} />
 
