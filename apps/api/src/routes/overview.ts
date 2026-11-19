@@ -3,8 +3,9 @@ import { config } from '../config.js';
 import { pool } from '../db.js';
 import { HttpError, badRequest } from '../errors.js';
 import { AiError } from '../importer/anthropic.js';
-import { MONTH_RE } from '../lib.js';
+import { MONTH_RE, monthOf, todayISO } from '../lib.js';
 import { countAiCall, getAiState } from '../services/ai.js';
+import { loadOutlook, MAX_OUTLOOK_MONTHS } from '../services/outlookData.js';
 import { buildOverview, loadComparison } from '../services/overviewData.js';
 import { buildFacts, writeSummary } from '../services/summary.js';
 import { loadSubscriptions } from './subscriptions.js';
@@ -19,6 +20,16 @@ export async function overviewRoutes(app: FastifyInstance) {
 
   // Custo do mês contra a média dos até 3 meses anteriores que têm gastos (mesma regra do custo total).
   app.get<{ Querystring: { month?: string } }>('/overview/compare', async (req) => loadComparison(monthOrFail(req.query.month)));
+
+  // Quanto vai sair da conta nos próximos meses: o que já está lançado nas faturas e a estimativa ao fechar.
+  app.get<{ Querystring: { from?: string; months?: string } }>('/overview/outlook', async (req) => {
+    const from = req.query.from ? monthOrFail(req.query.from) : monthOf(todayISO());
+    const months = req.query.months === undefined ? 3 : Number(req.query.months);
+    if (!Number.isInteger(months) || months < 1 || months > MAX_OUTLOOK_MONTHS) {
+      throw badRequest(`Informe de 1 a ${MAX_OUTLOOK_MONTHS} meses.`);
+    }
+    return loadOutlook(from, months);
+  });
 
   // Resumo do mês escrito por IA (opcional, só ao clicar). A IA recebe apenas agregados já calculados aqui;
   // o texto é descartado se citar qualquer número que não esteja nesses agregados.
