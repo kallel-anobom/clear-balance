@@ -136,6 +136,20 @@ export interface Subscription {
 }
 export interface SubscriptionsResponse { window_months: number; total_monthly_cents: number; items: Subscription[] }
 
+export interface InvoiceEstimate {
+  invoice_id: number | null; card_id: number; card_name: string; due_date: string; closing_date: string | null;
+  statement_total_cents: number | null; fixed_cents: number; variable_cents: number; lines_count: number;
+  last_purchase_on: string | null; committed_cents: number; estimated_cents: number;
+  basis: 'confirmed' | 'closed' | 'estimate' | 'launched_only'; history_count: number; avg_variable_cents: number | null;
+  stale_days: number | null; is_stale: boolean;
+}
+export interface OutlookMonth {
+  month: string; is_current: boolean; paid_cents: number; other_cents: number;
+  other_items: { key: string; label: string; date: string | null; amount_cents: number; estimated: boolean }[];
+  invoices: InvoiceEstimate[]; committed_cents: number; estimated_cents: number; has_estimates: boolean; stale_count: number;
+}
+export interface OutlookResponse { from: string; months: OutlookMonth[] }
+
 export interface Overview {
   month: string; today: string;
   spending: {
