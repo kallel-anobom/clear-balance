@@ -8,11 +8,13 @@ import { useMonth } from './hooks';
 import CardsPage from './pages/Cards';
 import ImportPage from './pages/Import';
 import OverviewPage from './pages/Overview';
+import QuickAddPage from './pages/QuickAdd';
 import SettingsPage from './pages/Settings';
 import TransactionsPage from './pages/Transactions';
 
 const NAV = [
   { to: '/', label: 'Visão do mês', icon: '📊', end: true },
+  { to: '/rapido', label: 'Lançar compra', icon: '⚡' },
   { to: '/lancamentos', label: 'Lançamentos', icon: '🧾' },
   { to: '/cartoes', label: 'Cartões e faturas', icon: '💳' },
   { to: '/importar', label: 'Importação', icon: '📥' },
@@ -82,6 +84,7 @@ export default function App() {
           ) : (
             <Routes>
               <Route path="/" element={<OverviewPage month={month} />} />
+              <Route path="/rapido" element={<QuickAddPage />} />
               <Route path="/lancamentos" element={<TransactionsPage month={month} />} />
               <Route path="/cartoes" element={<CardsPage month={month} />} />
               <Route path="/importar" element={<ImportPage month={month} />} />

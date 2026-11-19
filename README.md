@@ -118,6 +118,10 @@ Quando você corrige o tipo ou a categoria de uma linha e deixa marcado **“lem
 - **Assinaturas:** `GET /api/subscriptions` procura nos últimos 12 meses o mesmo estabelecimento (mesmo normalizador das regras), com valor parecido (até 15% da mediana), **3 meses seguidos ou mais** e ainda ativo; ignora parcelas, previstos, lançamentos já gerados por recorrência e estabelecimentos que já têm recorrência cadastrada. Mostra valor típico, última cobrança, reajuste e estimativa anual, e *Criar recorrência* cadastra a mensalidade a partir do mês seguinte. Tudo é calculado no servidor, sem IA.
 - **Migração:** o orçamento usa a tabela `budgets` (`007_budgets.sql`, com RLS). Rode `npm run db:migrate` no banco de produção **antes** de publicar esta versão. *Apagar todos os dados* também apaga os orçamentos.
 
+### Lançar compra rápido (celular)
+
+A tela **Lançar compra** (`/rapido`) registra uma compra no cartão em segundos: cartão (o último usado fica lembrado), valor, onde foi e data (hoje). A compra entra na fatura certa pela data e a previsão já considera. A categoria fica **para revisar** em *Lançamentos* (lá o sistema aprende). Ao importar a fatura depois, compras com mesma data e valor aparecem como possível duplicata para vincular. No celular, use *Adicionar à tela inicial* do navegador: o site tem manifesto (`manifest.webmanifest`) e abre direto nesta tela. Não há modo offline.
+
 ### Previsão dos próximos meses (quanto vou pagar)
 
 No topo da *Visão do mês*, o painel **Quanto vou pagar nos próximos meses** responde, para o mês atual e os 2 seguintes, quanto **sai da conta** em cada mês. É visão de **caixa**, diferente do *Custo do mês* (que é por competência, pela data da compra): entram as **faturas que vencem** naquele mês (inclusive compras feitas em meses anteriores) mais as contas e recorrências ainda pendentes. O pagamento da fatura continua sendo só saída de caixa, nunca despesa.
