@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { api, type AppSettings, type PreviewResponse, type PreviewRow, type TxType } from '../api';
 import { Badge, Empty, ErrorBox, Field, Loading, MoneyField, Panel } from '../components';
 import { TYPE_LABEL, brl, dateBR, todayISO } from '../format';
@@ -9,6 +9,16 @@ import { extractFromFiles, isImageFile, isPdfFile, type Progress } from '../ocr'
 
 type Row = PreviewRow & { manual?: boolean; orig?: { type: TxType; category_id: number | null }; forget?: boolean };
 interface ImportBatch { id: number; label: string; source_kind: string; created_at: string; transactions: number }
+
+// Reenviar a fatura aberta é rotina: lembra o último destino e o último vencimento (só neste navegador).
+const LAST_TARGET = 'cb:import:target';
+const lastDueKey = (cardId: string) => `cb:import:due:${cardId}`;
+const remembered = (key: string): string | null => {
+  try { return localStorage.getItem(key); } catch { return null; }
+};
+const remember = (key: string, value: string) => {
+  try { localStorage.setItem(key, value); } catch { /* sem armazenamento: segue sem lembrar */ }
+};
 
 const ACTIONS = { create: 'Importar', skip: 'Ignorar', link: 'Vincular ao já cadastrado' } as const;
 
@@ -35,10 +45,19 @@ function MappingStep({ data, onApply, busy }: { data: NonNullable<PreviewRespons
 }
 
 export default function ImportPage({ month }: { month: string }) {
-  const { accounts, cards, categories } = useLookups();
+  const { accounts, cards, categories, loading: lookupsLoading } = useLookups();
   const refresh = useRefresh();
+  const [params] = useSearchParams();
   const fileRef = useRef<HTMLInputElement>(null);
-  const [target, setTarget] = useState('');
+  const [target, setTargetState] = useState(() => (params.get('cartao') ? `card:${params.get('cartao')}` : remembered(LAST_TARGET) ?? ''));
+  const setTarget = (v: string) => { setTargetState(v); if (v) remember(LAST_TARGET, v); };
+  // Destino lembrado que não existe mais (conta ou cartão apagado): volta para "Escolha…".
+  useEffect(() => {
+    if (lookupsLoading || !target) return;
+    const [kind, id] = target.split(':');
+    const exists = kind === 'card' ? cards.some((c) => String(c.id) === id) : accounts.some((a) => String(a.id) === id);
+    if (!exists) setTargetState('');
+  }, [lookupsLoading, target, cards, accounts]);
   const [files, setFiles] = useState<File[]>([]);
   const [progress, setProgress] = useState<Progress | null>(null);
   const [refMonth, setRefMonth] = useState(month);
@@ -80,7 +99,9 @@ export default function ImportPage({ month }: { month: string }) {
     setPreview(p);
     setRows(p.rows.map((r) => ({ ...r, orig: { type: r.type, category_id: r.category_id } })));
     setResult(null);
-    setInvoiceDue(p.pdf?.detected_due_date ?? '');
+    // Sem vencimento no arquivo, sugere o da última fatura deste cartão se ainda não venceu (a fatura aberta continua a mesma).
+    const last = tType === 'card' ? remembered(lastDueKey(tIdStr)) : null;
+    setInvoiceDue(p.pdf?.detected_due_date ?? (last && last >= todayISO() ? last : ''));
     setStatementTotal(null);
   };
 
@@ -147,6 +168,7 @@ export default function ImportPage({ month }: { month: string }) {
       });
     },
     onSuccess: (res) => {
+      if (isCard && invoiceDue) remember(lastDueKey(tIdStr), invoiceDue);
       setResult({ ...res, skipped: rows.length - res.created - res.linked });
       setPreview(null); setRows([]); setFiles([]); setReadText(null); setPasted(''); setPasteOpen(false);
       if (fileRef.current) fileRef.current.value = '';
@@ -312,11 +334,11 @@ export default function ImportPage({ month }: { month: string }) {
 
           {isCard && (
             <div className="form-grid boxed">
-              <Field label="Vencimento desta fatura" hint={preview.pdf?.detected_due_date ? 'Lido no PDF — confirme.' : 'Opcional. Em branco, as compras entram na fatura calculada pelo fechamento do cartão.'}>
+              <Field label="Vencimento desta fatura" hint={preview.pdf?.detected_due_date ? 'Lido no PDF — confirme.' : invoiceDue ? 'Mesmo vencimento da última importação deste cartão — confirme.' : 'Opcional. Em branco, as compras entram na fatura calculada pelo fechamento do cartão.'}>
                 <input type="date" value={invoiceDue} onChange={(e) => setInvoiceDue(e.target.value)} />
               </Field>
               <MoneyField label="Total da fatura (opcional)" value={statementTotal} onChange={setStatementTotal}
-                hint={preview.pdf?.detected_total_cents != null ? `Lido no PDF: ${brl(preview.pdf.detected_total_cents)} — digite para confirmar.` : 'Se informado, passa a ser o valor confirmado da fatura.'} />
+                hint={preview.pdf?.detected_total_cents != null ? `Lido no PDF: ${brl(preview.pdf.detected_total_cents)} — digite para confirmar. Com a fatura ainda aberta, deixe em branco: informar o total o torna definitivo e a previsão deixa de estimar o resto.` : 'Só informe com a fatura fechada. Informado, passa a ser o valor confirmado e a previsão deixa de estimar compras novas.'} />
             </div>
           )}
 
