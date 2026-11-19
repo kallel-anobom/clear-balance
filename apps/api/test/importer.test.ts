@@ -112,6 +112,13 @@ describe('classificação', () => {
   it('pagamento recebido dentro da fatura é ignorado por padrão', () => {
     expect(s('Pagamento recebido', 'in', 'card').skip_by_default).toBe(true);
   });
+  it('débito automático e saldo da fatura anterior dentro da fatura não entram como compra nem como crédito', () => {
+    expect(s('Pagamento Debito Automatico', 'in', 'card').skip_by_default).toBe(true);
+    expect(s('Valor pendente do mês anterior', 'out', 'card').skip_by_default).toBe(true);
+    expect(s('Saldo da fatura anterior', 'out', 'card').skip_by_default).toBe(true);
+    // Compra comum não é afetada.
+    expect(s('Supermercado Central', 'out', 'card').skip_by_default).toBe(false);
+  });
   it('juros do cheque especial são despesa; pagamento do cheque especial não', () => {
     expect(s('JUROS LIMITE DA CONTA', 'out')).toMatchObject({ type: 'expense', category_slug: 'juros-tarifas' });
     expect(s('PAGAMENTO CHEQUE ESPECIAL', 'out').type).toBe('overdraft_payment');
