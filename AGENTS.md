@@ -98,6 +98,6 @@ npm run db:migrate     # aplica migrações pendentes
 
 ## Estado atual (nov/2026)
 
-Entregue: custo do mês por competência, importação (CSV, PDF, imagem), parcelas projetadas, recorrências, regras aprendidas com similaridade, aprender ao editar em Lançamentos, orçamento fixo por categoria, comparação com a média dos 3 meses anteriores, assinaturas detectadas, leitor de reserva com IA (em trechos paralelos) e resumo do mês com IA.
+Entregue: custo do mês por competência, importação (CSV, PDF, imagem), parcelas projetadas, recorrências, regras aprendidas com similaridade, aprender ao editar em Lançamentos, orçamento fixo por categoria, comparação com a média dos 3 meses anteriores, assinaturas detectadas, leitor de reserva com IA (em trechos paralelos), resumo do mês com IA e previsão de caixa dos próximos meses (`GET /overview/outlook`, funções puras em `services/outlook.ts`, dados em `services/outlookData.ts`): fatura que vence no mês estimada pela média da parte variável das últimas 3 faturas fechadas; o total confirmado da fatura desliga a estimativa, por isso não se preenche com a fatura aberta. A importação lembra cartão e vencimento.
 
 Ideias em aberto (só fazer se o usuário pedir): alertas de orçamento, metas de economia, orçamento por mês, exportar CSV, backup automático, testes de interface.

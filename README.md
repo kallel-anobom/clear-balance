@@ -44,7 +44,7 @@ Só faça isso em uma rede de confiança (sem login, qualquer pessoa na rede ver
 
 | Tela | O que mostra |
 | --- | --- |
-| **Visão do mês** | **Custo total do mês** (minha parte, com o detalhamento de como chegamos nele), gasto já realizado × ainda previsto, quanto ainda vai sair e quando, salários (bruto, descontos, líquido), saldo/sobra prevista, reembolsos a receber, cheque especial, gasto por categoria e **pendências**. |
+| **Visão do mês** | **Custo total do mês** (minha parte, com o detalhamento de como chegamos nele), gasto já realizado × ainda previsto, quanto ainda vai sair e quando, salários (bruto, descontos, líquido), saldo/sobra prevista, reembolsos a receber, cheque especial, gasto por categoria, **pendências** e, no topo, a **previsão do que vou pagar nos próximos meses** (faturas que vencem mais contas fixas). |
 | **Lançamentos** | Receitas, despesas, transferências, reembolsos, pagamentos de fatura e do cheque especial. Filtros por mês, categoria, conta, cartão, tipo, situação e “só para revisar”. Edição de categoria/descrição, marcar para revisar, marcar como pago/recebido, registrar reembolso. |
 | **Cartões e faturas** | Cartões, faturas (fechamento, vencimento e pagamento — três datas separadas), compras de cada fatura, total confirmado × estimado, conferência da soma, pagar fatura, vincular pagamentos soltos e **parcelas futuras** (quanto ainda cai em cada mês). |
 | **Importação** | CSV, PDF e **imagens de extratos** (OCR no navegador) com **revisão antes de salvar**, detecção de duplicatas e de parcelas, vínculo a itens já previstos e apagar importações. |
@@ -117,6 +117,17 @@ Quando você corrige o tipo ou a categoria de uma linha e deixa marcado **“lem
 - **Comparado aos últimos meses:** o custo do mês contra a **média dos até 3 meses anteriores que têm gastos** (mês vazio não entra, para não puxar a média para baixo; com menos de 3 meses o painel avisa), com a diferença em valor e % e as categorias que mais subiram. API: `GET /api/overview/compare?month=AAAA-MM`.
 - **Assinaturas:** `GET /api/subscriptions` procura nos últimos 12 meses o mesmo estabelecimento (mesmo normalizador das regras), com valor parecido (até 15% da mediana), **3 meses seguidos ou mais** e ainda ativo; ignora parcelas, previstos, lançamentos já gerados por recorrência e estabelecimentos que já têm recorrência cadastrada. Mostra valor típico, última cobrança, reajuste e estimativa anual, e *Criar recorrência* cadastra a mensalidade a partir do mês seguinte. Tudo é calculado no servidor, sem IA.
 - **Migração:** o orçamento usa a tabela `budgets` (`007_budgets.sql`, com RLS). Rode `npm run db:migrate` no banco de produção **antes** de publicar esta versão. *Apagar todos os dados* também apaga os orçamentos.
+
+### Previsão dos próximos meses (quanto vou pagar)
+
+No topo da *Visão do mês*, o painel **Quanto vou pagar nos próximos meses** responde, para o mês atual e os 2 seguintes, quanto **sai da conta** em cada mês. É visão de **caixa**, diferente do *Custo do mês* (que é por competência, pela data da compra): entram as **faturas que vencem** naquele mês (inclusive compras feitas em meses anteriores) mais as contas e recorrências ainda pendentes. O pagamento da fatura continua sendo só saída de caixa, nunca despesa.
+
+- **Fatura com total confirmado** (você informou o total do extrato): usa esse total.
+- **Fatura já fechada:** usa o que foi lançado.
+- **Fatura aberta:** a parte fixa (parcelas e recorrências lançadas) mais o maior valor entre o que já foi lançado e a **média da parte variável das últimas 3 faturas fechadas** do mesmo cartão. A estimativa nunca fica abaixo do que já foi lançado e não adivinha compras grandes ou de época (como as de fim de ano). Sem histórico, mostra só o lançado. Cartão com histórico e sem fatura lançada no mês também ganha uma fatura estimada.
+- **Desatualizada:** se a fatura está aberta e a última compra lançada tem mais de 3 dias, o painel avisa e mostra *Atualizar fatura*, que abre a *Importação* já com o cartão escolhido. O sistema lembra o último cartão e o vencimento usados na importação.
+- **Importante:** não preencha o *total da fatura* enquanto ela estiver aberta. Esse campo torna o total definitivo e a previsão deixa de estimar. Reimportar o print ou PDF da fatura aberta só acrescenta as compras novas (as repetidas são ignoradas).
+- API: `GET /api/overview/outlook?from=AAAA-MM&months=1..6` (padrão: mês atual e 3 meses no total). Sem migração nova.
 
 ### IA opcional (leitor de reserva)
 
