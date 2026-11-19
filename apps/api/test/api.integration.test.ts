@@ -552,6 +552,49 @@ describe.skipIf(!available)('API + PostgreSQL', () => {
     });
   });
 
+  describe('previsão dos próximos meses (faturas)', () => {
+    type Row = Record<string, any>;
+    let cardId: number;
+    let months: string[];
+    const outlook = async (n = 3) => (await json('GET', `/overview/outlook?months=${n}`)).body as { from: string; months: Row[] };
+    const mine = (m: Row) => (m.invoices as Row[]).find((i) => i.card_id === cardId);
+
+    it('valida os parâmetros', async () => {
+      expect((await json('GET', '/overview/outlook?months=0')).status).toBe(400);
+      expect((await json('GET', '/overview/outlook?months=7')).status).toBe(400);
+      expect((await json('GET', '/overview/outlook?from=xx')).status).toBe(400);
+    });
+
+    it('estima a fatura pela média das últimas fechadas, separa o que já está lançado e cria a fatura que ainda não existe', async () => {
+      const { monthOf, addMonths, todayISO } = await import('../src/lib.js');
+      const now = monthOf(todayISO());
+      months = [0, 1, 2].map((i) => addMonths(now, i));
+      // Fechamento no último dia do mês (31 vira o fim do mês) para o teste não depender do dia em que roda.
+      cardId = (await json('POST', '/cards', { name: 'Cartão Previsão', closing_day: 31, due_day: 15 })).body.id;
+      const buy = (month: string, day: string, cents: number) =>
+        json('POST', '/transactions', { type: 'expense', description: 'COMPRA PREVISAO', card_id: cardId, occurred_on: `${month}-${day}`, total_cents: cents });
+      for (const back of [3, 2, 1]) expect((await buy(addMonths(now, -back), '10', 100000)).status).toBe(201);
+      expect((await buy(now, '01', 30000)).status).toBe(201); // fatura aberta que vence no mês seguinte
+
+      const r = await outlook();
+      expect(r.months.map((m) => m.month)).toEqual(months);
+      // Fatura que vence no mês seguinte: lançado 300,00, média das 3 fechadas 1.000,00.
+      expect(mine(r.months[1])).toMatchObject({ basis: 'estimate', committed_cents: 30000, estimated_cents: 100000, history_count: 3, avg_variable_cents: 100000 });
+      // Mês depois dele: nenhuma compra lançada, estimada só pela média.
+      expect(mine(r.months[2])).toMatchObject({ invoice_id: null, basis: 'estimate', committed_cents: 0, estimated_cents: 100000 });
+      expect(r.months[1].estimated_cents).toBeGreaterThanOrEqual(100000);
+      expect(r.months[1].committed_cents).toBeLessThan(r.months[1].estimated_cents);
+      expect(r.months[1].has_estimates).toBe(true);
+    });
+
+    it('total confirmado da fatura vira o valor real, sem estimativa', async () => {
+      const inv = (await json('GET', `/invoices?card_id=${cardId}`)).body.invoices.find((i: Row) => i.due_date.startsWith(months[1]));
+      expect((await json('PATCH', `/invoices/${inv.id}`, { statement_total_cents: 123400 })).status).toBe(200);
+      const r = await outlook();
+      expect(mine(r.months[1])).toMatchObject({ basis: 'confirmed', committed_cents: 123400, estimated_cents: 123400 });
+    });
+  });
+
   describe('orçamento, comparação e assinaturas', () => {
     type Row = Record<string, any>;
     let accountId: number;

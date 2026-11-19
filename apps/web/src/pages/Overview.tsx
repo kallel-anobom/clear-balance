@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { api, qs, type FlowItem, type Overview } from '../api';
 import { Badge, Empty, ErrorBox, Loading, Panel } from '../components';
 import { brl, dateBR, monthLabel, monthShort } from '../format';
-import { ComparePanel, SubscriptionsPanel, SummaryPanel } from '../Insights';
+import { ComparePanel, OutlookPanel, SubscriptionsPanel, SummaryPanel } from '../Insights';
 import { MarkPaid } from '../MarkPaid';
 
 function FlowRow({ item, onPay, month }: { item: FlowItem; onPay: (i: FlowItem) => void; month: string }) {
@@ -108,6 +108,8 @@ export default function OverviewPage({ month }: { month: string }) {
           {f.has_unconfirmed_dates && <b>datas ainda a confirmar</b>}. Itens assim aparecem com a marca <Badge tone="warn">estimado</Badge> ou <Badge tone="warn">data a confirmar</Badge>.
         </div>
       )}
+
+      <OutlookPanel />
 
       <div className="kpis">
         <div className="kpi">

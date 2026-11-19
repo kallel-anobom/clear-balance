@@ -1,7 +1,8 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { api, qs, type AppSettings, type CostComparison, type MonthSummary, type Subscription, type SubscriptionsResponse } from './api';
+import { Link } from 'react-router-dom';
+import { api, qs, type AppSettings, type CostComparison, type InvoiceEstimate, type MonthSummary, type OutlookMonth, type OutlookResponse, type Subscription, type SubscriptionsResponse } from './api';
 import { Badge, Empty, ErrorBox, Loading, Panel } from './components';
-import { brl, addMonths, monthShort } from './format';
+import { brl, addMonths, dateBR, monthLabel, monthShort } from './format';
 import { useRefresh } from './hooks';
 
 const pctText = (p: number | null) => (p === null ? 'novo' : `${p > 0 ? '+' : ''}${p.toLocaleString('pt-BR')}%`);
@@ -142,6 +143,96 @@ export function SummaryPanel({ month }: { month: string }) {
           <div className="inline-form"><button className="btn small" onClick={() => gen.reset()}>Fechar</button></div>
         </>
       )}
+    </Panel>
+  );
+}
+
+const BASIS_TEXT: Record<InvoiceEstimate['basis'], string> = {
+  confirmed: 'total confirmado',
+  closed: 'fatura fechada',
+  estimate: 'estimada pela média das faturas anteriores',
+  launched_only: 'só o que está lançado (sem histórico para estimar)',
+};
+
+function OutlookInvoice({ inv }: { inv: InvoiceEstimate }) {
+  const estimated = inv.basis === 'estimate';
+  return (
+    <li className="row">
+      <div className="row-main">
+        <strong>Fatura {inv.card_name}</strong>
+        <div className="row-sub">
+          <span>vence {dateBR(inv.due_date)}</span>
+          <Badge tone={estimated || inv.basis === 'launched_only' ? 'warn' : 'good'}>{BASIS_TEXT[inv.basis]}</Badge>
+          {inv.is_stale && (
+            <Badge tone="warn" title="Reenvie a fatura aberta em Importação para atualizar o valor">
+              {inv.stale_days === null ? 'sem compras lançadas ainda' : `última compra lançada há ${inv.stale_days} dias`}
+            </Badge>
+          )}
+        </div>
+        <div className="muted small">
+          Lançado {brl(inv.committed_cents)}
+          {inv.fixed_cents > 0 && <> (inclui {brl(inv.fixed_cents)} de parcelas e recorrências)</>}
+          {estimated && inv.avg_variable_cents !== null && <> · média das compras de {inv.history_count} fatura{inv.history_count > 1 ? 's' : ''} anterior{inv.history_count > 1 ? 'es' : ''}: {brl(inv.avg_variable_cents)}</>}
+        </div>
+      </div>
+      <div className="row-amount">
+        <strong className={estimated ? 'estimated' : ''}>{estimated ? '≈ ' : ''}{brl(inv.estimated_cents)}</strong>
+        {inv.basis !== 'confirmed' && inv.basis !== 'closed' && <Link className="btn small" to={`/importar?cartao=${inv.card_id}`}>Atualizar fatura</Link>}
+      </div>
+    </li>
+  );
+}
+
+function OutlookCard({ m }: { m: OutlookMonth }) {
+  const differs = m.estimated_cents !== m.committed_cents;
+  return (
+    <div className="kpi">
+      <span className="kpi-label">{m.is_current ? `Ainda falta pagar em ${monthLabel(m.month)}` : `A pagar em ${monthLabel(m.month)}`}</span>
+      <strong className="kpi-value">{differs ? '≈ ' : ''}{brl(m.estimated_cents)}</strong>
+      <span className="kpi-sub">
+        {differs ? `Já lançado: ${brl(m.committed_cents)} · o resto é estimativa` : 'Tudo já lançado ou confirmado'}
+        {m.is_current && m.paid_cents > 0 && ` · já saiu ${brl(m.paid_cents)}`}
+      </span>
+      {m.stale_count > 0 && <span className="kpi-sub"><Badge tone="warn">{m.stale_count} fatura{m.stale_count > 1 ? 's' : ''} desatualizada{m.stale_count > 1 ? 's' : ''}</Badge></span>}
+    </div>
+  );
+}
+
+function OutlookDetails({ m }: { m: OutlookMonth }) {
+  return (
+    <details className="cost-details">
+      <summary className="muted small">{m.is_current ? `Ver de onde vem o que falta em ${monthLabel(m.month)}` : `Ver de onde vem ${monthLabel(m.month)}`}</summary>
+        {m.invoices.length > 0 && <ul className="rows">{m.invoices.map((i) => <OutlookInvoice key={`${i.card_id}-${i.due_date}`} inv={i} />)}</ul>}
+        {m.other_items.length > 0 && (
+          <>
+            <h4 className="subhead">Contas e outras saídas pendentes · {brl(m.other_cents)}</h4>
+            <ul className="rows">
+              {m.other_items.map((i) => (
+                <li className="row" key={i.key}>
+                  <div className="row-main"><strong>{i.label}</strong><div className="row-sub">{i.date ? dateBR(i.date) : <Badge tone="warn">sem data</Badge>}{i.estimated && <Badge tone="warn">estimado</Badge>}</div></div>
+                  <div className="row-amount"><strong>{i.estimated ? '≈ ' : ''}{brl(i.amount_cents)}</strong></div>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+        {m.invoices.length === 0 && m.other_items.length === 0 && <Empty>Nada previsto para este mês.</Empty>}
+    </details>
+  );
+}
+
+/** Quanto vai sair da conta nos próximos meses: o que já está nas faturas e a estimativa ao fechar. */
+export function OutlookPanel() {
+  const q = useQuery({ queryKey: ['outlook'], queryFn: () => api.get<OutlookResponse>('/overview/outlook?months=3') });
+  if (q.isLoading) return <Panel title="Quanto vou pagar nos próximos meses"><Loading /></Panel>;
+  if (q.error || !q.data) return <Panel title="Quanto vou pagar nos próximos meses"><ErrorBox error={q.error ?? new Error('Sem dados')} /></Panel>;
+  return (
+    <Panel title="Quanto vou pagar nos próximos meses">
+      <div className="kpis">{q.data.months.map((m) => <OutlookCard key={m.month} m={m} />)}</div>
+      {q.data.months.map((m) => <OutlookDetails key={m.month} m={m} />)}
+      <p className="muted small">
+        Conta o que <strong>sai da conta</strong> em cada mês: faturas que vencem nele (inclusive compras de meses anteriores) mais contas e recorrências pendentes. A parte estimada é a média das compras das últimas 3 faturas fechadas de cada cartão, nunca abaixo do que já foi lançado, e não adivinha compras grandes ou de época (como as de fim de ano). Para atualizar, reenvie a fatura aberta em Importação.
+      </p>
     </Panel>
   );
 }
