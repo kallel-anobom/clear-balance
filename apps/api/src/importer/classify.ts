@@ -151,7 +151,10 @@ function typeFits(type: SuggestedType, kind: TargetKind, direction: 'in' | 'out'
 const OVERDRAFT_PAYMENT = /\b(pagamento|pgto|pag|amortizacao|cobertura|quitacao)\b.*\b(cheque especial|limite|lis)\b/;
 const OVERDRAFT_COST = /cheque especial|juros (limite|cheque|cred|conta)|\blis\b|encargos|\biof\b|tarifa|\btar\b|anuidade/;
 const INVOICE_PAYMENT_ACCOUNT = /(pagamento|pgto|pag)\b.*\b(fatura|cartao)|fatura (do )?cartao|\bfatura\b/;
-const INVOICE_PAYMENT_ON_CARD = /pagamento (recebido|efetuado|de fatura|fatura|em)|pgto (fatura|recebido)|credito de pagamento|obrigado pelo pagamento|pagamento on.?line/;
+const INVOICE_PAYMENT_ON_CARD = /pagamento (recebido|efetuado|de fatura|fatura|em|debito autom|autom)|pgto (fatura|recebido)|credito de pagamento|obrigado pelo pagamento|pagamento on.?line|debito automatico/;
+// Saldo da fatura anterior que aparece como linha na fatura nova (ex.: "Valor pendente do mês anterior"):
+// as compras já foram contadas no mês em que aconteceram, então nunca é compra nova.
+const CARRYOVER_ON_CARD = /(valor|saldo) pendente (do mes|da fatura) anterior|saldo (restante )?(da )?fatura anterior|saldo anterior|fatura anterior/;
 const REIMBURSEMENT = /reembolso|ressarcimento|devolucao/;
 const REFUND = /estorno|cashback/;
 const SALARY = /salario|folha de pagamento|pagto salario|remuneracao|provento/;
@@ -199,6 +202,9 @@ function keywordSuggest(opts: SuggestOpts): Suggestion {
   const base: Suggestion = { type: opts.direction === 'in' ? 'income' : 'expense', category_slug: null, skip_by_default: false, needs_review: false, note: null };
 
   if (opts.kind === 'card') {
+    if (CARRYOVER_ON_CARD.test(d)) {
+      return { ...base, type: 'expense', skip_by_default: true, note: 'Saldo da fatura anterior: as compras já foram contadas no mês delas. Não é compra nova.' };
+    }
     if (opts.direction === 'in' && INVOICE_PAYMENT_ON_CARD.test(d)) {
       return { ...base, type: 'expense', skip_by_default: true, note: 'Pagamento da fatura: é saída de caixa, não compra. Importe-o pelo extrato da conta.' };
     }
