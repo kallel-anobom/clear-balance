@@ -35,6 +35,7 @@ interface ExistingTx {
   transfer_account_id: number | null;
   card_id: number | null;
   import_hash: string | null;
+  installment_group?: string | null;
 }
 
 const txDate = (t: ExistingTx) => t.paid_on ?? t.occurred_on ?? t.due_date;
@@ -394,7 +395,7 @@ async function enrichPreview({ kind, targetId, rows, skipped, csvInfo, pdfInfo, 
   });
 
   // ----- Parcelamentos (só faturas de cartão) -----
-  const withInstallment = out.map((o) => ({ ...o, installment: null as null | { no: number; total: number; bare: boolean } }));
+  const withInstallment = out.map((o) => ({ ...o, installment: null as null | { no: number; total: number; bare: boolean }, link_default: o.action === 'link' }));
   if (kind === 'card') {
     const infos = withInstallment.map((o) => (o.direction === 'out' ? detectInstallment(o.description) : null));
     const groups = infos.map((i) => (i ? installmentGroup(targetId, i.base, i.total) : null));
@@ -420,6 +421,18 @@ async function enrichPreview({ kind, targetId, rows, skipped, csvInfo, pdfInfo, 
       o.installment = { no: info.no, total: info.total, bare: info.bare };
       const base = groups[i]!;
       const stored = rowsByGroup.get(base) ?? [];
+      // A linha já foi importada antes, mas sem parcelamento (versões antigas registravam a 2ª compra igual da mesma loja
+      // como compra comum): vincular transforma o lançamento em parcela e prevê as restantes, sem duplicar.
+      const sameHash = o.hash ? exact.get(o.hash) : undefined;
+      if (sameHash && sameHash.type === 'expense' && sameHash.card_id === targetId && !sameHash.installment_group) {
+        o.duplicate = { level: 'possible', id: sameHash.id, description: sameHash.description, date: txDate(sameHash), status: sameHash.status };
+        o.action = lowConfidence || !o.date ? 'skip' : 'link';
+        o.link_default = true;
+        const left = info.total - info.no;
+        o.note = `Já importada antes, mas sem parcelamento. Vincular a transforma na parcela ${info.no}/${info.total}${left > 0 ? ` e prevê as ${left} restante(s) nas próximas faturas` : ''}, sem duplicar.`;
+        claimed.set(base, [...(claimed.get(base) ?? []), { group: base, no: info.no, cents: o.abs_cents, is_projected: false }]);
+        return;
+      }
       const members: GroupMember[] = [
         ...stored.map((t) => ({ group: t.installment_group, no: t.installment_no, cents: Math.abs(t.total_cents), is_projected: t.is_projected })),
         ...(claimed.get(base) ?? []),
@@ -436,6 +449,7 @@ async function enrichPreview({ kind, targetId, rows, skipped, csvInfo, pdfInfo, 
       } else if (ex) {
         o.duplicate = { level: 'possible', id: ex.id, description: ex.description, date: txDate(ex), status: ex.status };
         o.action = lowConfidence || !o.date ? 'skip' : 'link';
+        o.link_default = true;
         o.note = `Parcela ${info.no}/${info.total} já prevista pelo sistema. Vincular confirma o valor real, sem duplicar.`;
       } else if (info.no < info.total || pick.group !== base) {
         const left = info.total - info.no;
@@ -665,4 +679,25 @@ async function link(
   // Mantém o vínculo com a importação para que "apagar importação" não deixe hash órfão.
   await db.query('update transactions set import_hash = $2 where id = $1', [ex.id, r.hash ?? null]);
   await syncInvoicePaid(db, ex.invoice_id);
+
+  // Compra de cartão importada antes sem parcelamento: agora vira a parcela da linha e as restantes são previstas.
+  const inst = kind === 'card' && ex.type === 'expense' && !ex.installment_group && r.direction === 'out' ? detectInstallment(r.description) : null;
+  if (inst) {
+    const baseGroup = installmentGroup(targetId, inst.base, inst.total);
+    const { rows: stored } = await db.query(
+      "select installment_group as \"group\", installment_no as no, abs(total_cents)::int as cents, is_projected from transactions where split_part(installment_group, '~', 1) = $1",
+      [baseGroup],
+    );
+    const pick = pickInstallmentGroup(baseGroup, inst.no, Math.abs(signed), stored as GroupMember[]);
+    if (!pick.existing) {
+      await db.query(
+        `update transactions set installment_no = $2, installment_total = $3, installment_group = $4,
+           needs_review = case when review_note like '%sem parcelamento%' then false else needs_review end,
+           review_note = case when review_note like '%sem parcelamento%' then null else review_note end
+         where id = $1`,
+        [ex.id, inst.no, inst.total, pick.group],
+      );
+      await projectInstallments(db, ex.id);
+    }
+  }
 }

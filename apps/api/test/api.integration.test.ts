@@ -344,6 +344,32 @@ describe.skipIf(!available)('API + PostgreSQL', () => {
       expect(next.body.rows[0].duplicate).toMatchObject({ level: 'possible', id: target.id });
     });
 
+    it('compra importada antes sem parcelamento volta a ser parcela ao vincular, sem duplicar', async () => {
+      // Reproduz o estrago de versões antigas: a segunda compra igual da loja ficou como compra comum.
+      const { pool } = await import('../src/db.js');
+      const plain = (await cardTxs()).find((t) => t.description.startsWith('LOJA DUPLA') && t.installment_no === 2 && t.total_cents === 4000)!;
+      await pool.query('delete from transactions where installment_group = $1 and is_projected', [plain.installment_group]);
+      await pool.query('update transactions set installment_no = null, installment_total = null, installment_group = null where id = $1', [plain.id]);
+      const before = (await cardTxs()).length;
+
+      const csv = 'date,title,amount\n2026-09-15,LOJA DUPLA PARC 02/06,100.00\n2026-09-04,LOJA DUPLA PARC 02/06,40.00\n';
+      const prev = await upload('/import/preview', { name: 'f.csv', content: csv }, { target_type: 'card', target_id: String(cardId) });
+      const [first, second] = prev.body.rows;
+      expect(first.action).toBe('skip');
+      expect(second).toMatchObject({ action: 'link', link_default: true });
+      expect(second.duplicate).toMatchObject({ level: 'possible', id: plain.id });
+      expect(second.note).toMatch(/sem parcelamento/);
+
+      const c = await commit([{ ...second, link_to_id: second.duplicate.id }], { invoice_due_date: '2026-11-05' });
+      expect(c.body).toMatchObject({ created: 0, linked: 1 });
+      const mine = (await cardTxs()).filter((t) => t.description.startsWith('LOJA DUPLA'));
+      const fixed = mine.find((t) => t.id === plain.id)!;
+      expect(fixed).toMatchObject({ installment_no: 2, installment_total: 6, is_projected: false });
+      expect(mine.filter((t) => t.installment_group === fixed.installment_group && t.is_projected).map((t) => t.installment_no).sort()).toEqual([3, 4, 5, 6]);
+      expect((await cardTxs()).length).toBe(before + 4); // só as 4 parcelas previstas; nada duplicado
+      expect(new Set(mine.map((t) => t.installment_group)).size).toBe(2);
+    });
+
     it('compra parcelada digitada à mão; apagar "esta e as próximas"; editar as próximas', async () => {
       const mk = (description: string) => json('POST', '/transactions', {
         type: 'expense', description, card_id: cardId, occurred_on: '2026-11-10', total_cents: 9000, installment_total: 3,
