@@ -25,6 +25,6 @@
     "test": "npm run test -w apps/api"
   },
   "devDependencies": {
-    "concurrently": "^10.0.6"
+    "concurrently": "^10.0.7"
   }
 }
