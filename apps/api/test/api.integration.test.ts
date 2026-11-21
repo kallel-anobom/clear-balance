@@ -319,6 +319,31 @@ describe.skipIf(!available)('API + PostgreSQL', () => {
       expect(txs.filter((t) => t.is_projected).map((t) => t.installment_no).sort()).toEqual([6, 7]);
     });
 
+    it('duas compras parceladas na mesma loja com valores diferentes não se confundem', async () => {
+      const csv = 'date,title,amount\n2026-09-15,LOJA DUPLA PARC 02/06,100.00\n2026-09-04,LOJA DUPLA PARC 02/06,40.00\n';
+      const prev = await upload('/import/preview', { name: 'f.csv', content: csv }, { target_type: 'card', target_id: String(cardId) });
+      expect(prev.body.rows.map((r: { action: string }) => r.action)).toEqual(['create', 'create']);
+      expect(prev.body.rows[1].note).toMatch(/Outra compra parcelada/);
+      const c = await commit(prev.body.rows, { invoice_due_date: '2026-11-05' });
+      expect(c.body.created).toBe(2);
+      const mine = (await cardTxs()).filter((t) => t.description.startsWith('LOJA DUPLA'));
+      const groups = new Set(mine.map((t) => t.installment_group));
+      expect(groups.size).toBe(2);
+      for (const g of groups) {
+        const parts = mine.filter((t) => t.installment_group === g);
+        expect(parts.map((t) => t.installment_no).sort()).toEqual([2, 3, 4, 5, 6]);
+      }
+
+      // Importar de novo: as duas linhas são duplicatas exatas, nenhuma some por engano.
+      const again = await upload('/import/preview', { name: 'f.csv', content: csv }, { target_type: 'card', target_id: String(cardId) });
+      expect(again.body.rows.map((r: { duplicate: { level: string } }) => r.duplicate.level)).toEqual(['exact', 'exact']);
+
+      // Na fatura seguinte, a parcela 3 de R$ 40 confirma a prevista da compra de R$ 40 (e não a de R$ 100).
+      const next = await upload('/import/preview', { name: 'f.csv', content: 'date,title,amount\n2026-09-04,LOJA DUPLA PARC 03/06,40.00\n' }, { target_type: 'card', target_id: String(cardId) });
+      const target = mine.find((t) => t.installment_no === 3 && t.total_cents === 4000)!;
+      expect(next.body.rows[0].duplicate).toMatchObject({ level: 'possible', id: target.id });
+    });
+
     it('compra parcelada digitada à mão; apagar "esta e as próximas"; editar as próximas', async () => {
       const mk = (description: string) => json('POST', '/transactions', {
         type: 'expense', description, card_id: cardId, occurred_on: '2026-11-10', total_cents: 9000, installment_total: 3,

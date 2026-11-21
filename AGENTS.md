@@ -93,6 +93,8 @@ npm run db:migrate     # aplica migrações pendentes
 - `merchantKey` descarta palavras de uma letra e ruídos de PIX/TED (`pix`, `enviado`...). Nomes como "Clube Z" viram só "clube".
 - A função da Vercel tem `maxDuration` de 30 s (`vercel.json`). A chamada à IA tem timeout de 25 s **por trecho**; extratos grandes são divididos em trechos paralelos (`splitForAi`). Não aumente o timeout acima do limite da função.
 - "Apagar importação" apaga **todos** os lançamentos daquele lote, inclusive os editados à mão. Avise o usuário antes de sugerir reimportar.
+- Parcelas: `installment_group` é cartão + descrição base + total; o valor desempata compras iguais na mesma loja (`pickInstallmentGroup`, grupos variantes `<grupo>~2`). Qualquer consulta por grupo deve considerar as variantes (`split_part(installment_group, '~', 1)`).
+- PDF de fatura: o total vem de "Total a pagar" (forte); "Total da fatura" genérico só vale sem total forte e fora de "fatura de <mês>"; linhas de pagamento da fatura anterior ficam fora da soma que confere o total.
 - Importar de novo sem apagar marca as linhas como duplicadas (impressão digital) e as pula.
 - Prioridade da categoria sugerida: regra exata > histórico idêntico > nome parecido > palavras-chave > categoria da IA.
 
