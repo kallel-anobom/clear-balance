@@ -119,6 +119,16 @@ Quando você corrige o tipo ou a categoria de uma linha e deixa marcado **“lem
 - **Assinaturas:** `GET /api/subscriptions` procura nos últimos 12 meses o mesmo estabelecimento (mesmo normalizador das regras), com valor parecido (até 15% da mediana), **3 meses seguidos ou mais** e ainda ativo; ignora parcelas, previstos, lançamentos já gerados por recorrência e estabelecimentos que já têm recorrência cadastrada. Mostra valor típico, última cobrança, reajuste e estimativa anual, e *Criar recorrência* cadastra a mensalidade a partir do mês seguinte. Tudo é calculado no servidor, sem IA.
 - **Migração:** o orçamento usa a tabela `budgets` (`007_budgets.sql`, com RLS). Rode `npm run db:migrate` no banco de produção **antes** de publicar esta versão. *Apagar todos os dados* também apaga os orçamentos.
 
+### Conferência dos números
+
+Logo abaixo da previsão, o painel **Conferência dos números** mostra onde o valor do mês pode estar errado. São checagens automáticas, **sem IA**, feitas no servidor com os dados que o sistema já tem (`GET /api/overview/checks?month=AAAA-MM`). Cada alerta diz o que foi visto e leva à tela onde resolver:
+
+- **Corrigir:** total confirmado da fatura diferente da soma das compras; fatura com soma negativa (pagamento ou crédito que entrou como compra).
+- **Conferir:** fatura vencida sem pagamento registrado; fatura bem acima do padrão do cartão (1,5× a média e pelo menos R$ 500 a mais, com 2+ faturas de histórico); fatura aberta desatualizada; compras idênticas no mesmo dia no mesmo cartão (possível importação repetida); previsão de caixa que não fecha com o "ainda vai sair da conta"; mês sem receita lançada.
+- **Atenção:** estimativa com 1 só fatura de histórico; despesas sem categoria; mês em que menos de 70% da saída prevista já está lançada.
+
+O cabeçalho mostra quantas verificações passaram e quanto da saída prevista já está lançado. Os alertas só apontam onde olhar: quem confirma o valor certo é a fatura do banco.
+
 ### Lançar compra rápido (celular)
 
 A tela **Lançar compra** (`/rapido`) registra uma compra no cartão em segundos: cartão (o último usado fica lembrado), valor, onde foi e data (hoje). A compra entra na fatura certa pela data e a previsão já considera. A categoria fica **para revisar** em *Lançamentos* (lá o sistema aprende). Ao importar a fatura depois, compras com mesma data e valor aparecem como possível duplicata para vincular. No celular, use *Adicionar à tela inicial* do navegador: o site tem manifesto (`manifest.webmanifest`) e abre direto nesta tela. Não há modo offline.

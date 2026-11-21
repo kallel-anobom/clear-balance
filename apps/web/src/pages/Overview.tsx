@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import { api, qs, type FlowItem, type Overview } from '../api';
 import { Badge, Empty, ErrorBox, Loading, Panel } from '../components';
 import { brl, dateBR, monthLabel, monthShort } from '../format';
+import { ChecksPanel } from '../Checks';
 import { ComparePanel, OutlookPanel, SubscriptionsPanel, SummaryPanel } from '../Insights';
 import { MarkPaid } from '../MarkPaid';
 
@@ -110,6 +111,7 @@ export default function OverviewPage({ month }: { month: string }) {
       )}
 
       <OutlookPanel />
+      <ChecksPanel month={month} />
 
       <div className="kpis">
         <div className="kpi">
