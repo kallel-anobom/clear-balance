@@ -47,7 +47,7 @@ Só faça isso em uma rede de confiança (sem login, qualquer pessoa na rede ver
 | **Visão do mês** | **Custo total do mês** (minha parte, com o detalhamento de como chegamos nele), gasto já realizado × ainda previsto, quanto ainda vai sair e quando, salários (bruto, descontos, líquido), saldo/sobra prevista, reembolsos a receber, cheque especial, gasto por categoria, **pendências** e, no topo, a **previsão do que vou pagar nos próximos meses** (faturas que vencem mais contas fixas). |
 | **Lançamentos** | Receitas, despesas, transferências, reembolsos, pagamentos de fatura e do cheque especial. Filtros por mês, categoria, conta, cartão, tipo, situação e “só para revisar”. Edição de categoria/descrição, marcar para revisar, marcar como pago/recebido, registrar reembolso. |
 | **Cartões e faturas** | Cartões, faturas (fechamento, vencimento e pagamento — três datas separadas), compras de cada fatura, total confirmado × estimado, conferência da soma, pagar fatura, vincular pagamentos soltos e **parcelas futuras** (quanto ainda cai em cada mês). |
-| **Importação** | CSV, PDF e **imagens de extratos** (OCR no navegador) com **revisão antes de salvar**, detecção de duplicatas e de parcelas, vínculo a itens já previstos e apagar importações. |
+| **Importação** | CSV, planilha **XLSX**, PDF e **imagens de extratos** (OCR no navegador) com **revisão antes de salvar**, detecção de duplicatas e de parcelas, vínculo a itens já previstos e apagar importações. |
 | **Configurações** | Conta e segurança (2FA), contas e saldos (informados por você), recorrências/dados iniciais, nomes de transferências próprias, **regras aprendidas**, privacidade, backup e apagar dados. |
 
 ## Regras financeiras implementadas
@@ -90,11 +90,12 @@ Itens mensais gerados ficam como **previstos / pendentes** (não pagos) até voc
 
 ## Importação
 
-1. Escolha a conta (extrato) ou o cartão (fatura) e o arquivo **CSV**, **PDF** ou **imagens** (PNG, JPG, WebP; pode escolher várias do mesmo extrato).
+1. Escolha a conta (extrato) ou o cartão (fatura) e o arquivo **CSV**, **XLSX**, **PDF** ou **imagens** (PNG, JPG, WebP; pode escolher várias do mesmo extrato).
 2. Revise a tabela: edite descrição, tipo e categoria; escolha *Importar*, *Ignorar* ou *Vincular* a um item já previsto. Nada é salvo antes de você confirmar.
 3. Salve. Cada importação pode ser apagada depois, junto com os lançamentos que criou.
 
 - **CSV:** detecta separador (`;` `,` tab), codificação (UTF-8/Latin-1), cabeçalho e formato brasileiro de datas/valores. Se não reconhecer as colunas, você mapeia manualmente. Em faturas, valor positivo = compra; há opção para inverter sinais.
+- **XLSX:** (ex.: fatura do Itaú) lê a primeira aba no servidor, sem dependências, e converte para CSV: datas como número do Excel viram datas, e a coluna *Parcelamento* ("Parcela 1 de 3") vai para a descrição para o sistema reconhecer a parcela. O pagamento do débito automático e o saldo da fatura anterior dentro da fatura vêm marcados para ignorar. A planilha não é guardada.
 - **PDF e imagens (lidos no seu navegador):** PDFs com texto são lidos com pdf.js; **imagens e PDFs escaneados** passam por OCR (Tesseract, em português) **no próprio navegador** — o arquivo nunca é enviado a ninguém e o modelo do OCR é servido pelo próprio site (sem CDN de terceiros). Só o **texto** resultante vai para a API, que o interpreta no padrão `DATA  DESCRIÇÃO  VALOR` (datas sem ano usam o mês de referência informado). Texto vindo de OCR **nunca é tratado como confiável**: as linhas chegam desmarcadas, com aviso, e você compara com a imagem (botão “Já conferi: marcar todas” quando terminar). O sistema compara a soma das linhas com o total lido na fatura. **Se não conseguir interpretar com segurança** (nenhuma linha reconhecida, soma não confere, entrada/saída ambígua), ele **não inventa valores**: avisa e permite digitar manualmente. PDFs com senha são recusados (remova a proteção antes; o sistema não pede nem guarda senhas). Dicas para o OCR: use o print inteiro, sem cortes, com boa resolução; prints em modo escuro são invertidos automaticamente.
 - **Duplicatas:** reimportar o mesmo arquivo é detectado (hash de data+valor+descrição, sem guardar o texto). Também sinaliza “possível duplicata” de lançamentos já cadastrados (mesmo valor, data próxima) e permite vincular a itens previstos (ex.: o aluguel previsto vira pago em vez de duplicar).
 - **Prints de apps de banco:** além do formato `DATA DESCRIÇÃO VALOR`, o leitor reconhece telas em que a data é título de grupo (“05 NOV”, “Hoje”, “Ontem”), com descrição e valor em linhas separadas ou invertidas, e valores como `- R$ 12,30`. Linhas sem data ou sem sinal ficam desmarcadas e pedem que você informe. Quando algo sai errado, a tela mostra o **texto lido** (editável, com *Reprocessar*), permite **colar o texto** do extrato e explica os números lidos (linhas, valores reconhecidos). Erros de rede, sessão expirada e servidor indisponível têm mensagens próprias.
@@ -190,7 +191,7 @@ apps/api   API Fastify + PostgreSQL
   src/migrations    esquema SQL (valores em centavos)
   src/services      regras: overview (função pura), transações, faturas, recorrências
   src/auth.ts       validação do login (JWT do Supabase) e lista de e-mails autorizados
-  src/importer      CSV, PDF/OCR (texto), parcelas, classificação, impressão digital anti-duplicata
+  src/importer      CSV, XLSX, PDF/OCR (texto), parcelas, classificação, impressão digital anti-duplicata
   src/routes        endpoints REST em /api
   test              unitários + integração
 apps/web   interface React (Vite) — páginas em src/pages; src/ocr.ts (leitura de PDF/imagem), src/auth.tsx (login)

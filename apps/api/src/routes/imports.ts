@@ -8,6 +8,7 @@ import { diffDays, isValidDate, monthOf, normalizeText } from '../lib.js';
 import { fingerprint, suggest, type LearnedRule } from '../importer/classify.js';
 import { detectInstallment, installmentGroup } from '../importer/installments.js';
 import { parseCsv, type CsvMapping } from '../importer/csv.js';
+import { isXlsx, xlsxToCsv, XlsxError } from '../importer/xlsx.js';
 import { extractPdfText, parseStatementText, PdfError } from '../importer/pdf.js';
 import { AiError, interpretWithAi } from '../importer/llm.js';
 import { redact } from '../importer/redact.js';
@@ -115,7 +116,7 @@ type CommitRow = z.infer<typeof commitRow>;
 export async function importRoutes(app: FastifyInstance) {
   app.post('/import/preview', async (req) => {
     const file = await req.file({ limits: { fileSize: config.maxUploadBytes, files: 1 } });
-    if (!file) throw badRequest('Envie um arquivo CSV ou PDF.');
+    if (!file) throw badRequest('Envie um arquivo CSV, XLSX ou PDF.');
     const f = (name: string) => (file.fields[name] as { value?: string } | undefined)?.value;
     const fields = previewFields.parse({
       target_type: f('target_type'),
@@ -124,8 +125,17 @@ export async function importRoutes(app: FastifyInstance) {
       invert_sign: f('invert_sign') || undefined,
       mapping: f('mapping') || undefined,
     });
-    const buf = await file.toBuffer();
+    let buf = await file.toBuffer();
     if (file.file.truncated) throw new HttpError(413, 'Arquivo grande demais (limite de 15 MB).');
+    // Planilha .xlsx (ex.: fatura do Itaú) vira CSV e segue o mesmo caminho do CSV do banco.
+    if (isXlsx(buf)) {
+      try {
+        buf = xlsxToCsv(buf);
+      } catch (e) {
+        if (e instanceof XlsxError) throw badRequest(e.message);
+        throw e;
+      }
+    }
     // O tipo vem do conteúdo (assinatura %PDF), não só da extensão.
     const isPdf = buf.subarray(0, 5).toString('latin1') === '%PDF-';
     const kind: TargetKind = fields.target_type;
