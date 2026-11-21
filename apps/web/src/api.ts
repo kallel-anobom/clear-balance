@@ -225,6 +225,8 @@ export interface PreviewRow {
   idx: number; date: string | null; description: string; abs_cents: number; direction: 'in' | 'out' | null;
   type: TxType; category_id: number | null; needs_review: boolean; note: string | null; uncertain_reason: string | null;
   action: 'create' | 'skip' | 'link'; hash: string | null;
+  /** true quando vincular ao lançamento existente é o caminho certo (prevista ou já importada sem parcelamento). */
+  link_default?: boolean;
   duplicate: null | { level: 'exact' | 'possible'; id: number; description: string; date: string | null; status: string };
   learned?: { id: number; uses: number } | null;
   ai?: boolean;

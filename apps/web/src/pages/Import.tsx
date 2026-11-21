@@ -286,7 +286,7 @@ export default function ImportPage({ month }: { month: string }) {
         <Panel title="2. Revise antes de salvar" action={<button className="btn small" onClick={() => { setPreview(null); setRows([]); }}>← Escolher outro arquivo</button>}>
           {preview.pdf?.confidence === 'none' && <div className="alert bad"><strong>Revisão manual necessária.</strong> {preview.pdf.warnings.join(' ')} Você pode digitar as linhas abaixo olhando o arquivo.</div>}
           {preview.pdf?.confidence === 'low' && <div className="alert warn"><strong>{preview.source_kind === 'image' ? 'Texto lido de imagem (OCR) — confira cada linha com a imagem aberta.' : 'Leitura do PDF pouco confiável — confira cada linha com o PDF aberto.'}</strong> {' '}{preview.pdf.warnings.join(' ')} As linhas vieram desmarcadas: marque “Importar” só nas que conferir.{' '}
-            <button className="btn small" onClick={() => setRows((rs) => rs.map((r) => (r.date && r.direction && r.duplicate?.level !== 'exact' ? { ...r, action: r.duplicate?.level === 'possible' && r.duplicate.status === 'scheduled' ? 'link' : 'create' } : r)))}>Já conferi: marcar todas para importar</button></div>}
+            <button className="btn small" onClick={() => setRows((rs) => rs.map((r) => (r.date && r.direction && r.duplicate?.level !== 'exact' ? { ...r, action: r.duplicate?.level === 'possible' && (r.duplicate.status === 'scheduled' || r.link_default) ? 'link' : 'create' } : r)))}>Já conferi: marcar todas para importar</button></div>}
           {preview.pdf?.stats && preview.pdf.confidence !== 'ok' && (
             <p className="muted small">
               Li {preview.pdf.stats.lines} linha(s) de texto: {preview.pdf.stats.lines_with_money} com valor em reais (ex.: 1.234,56)
