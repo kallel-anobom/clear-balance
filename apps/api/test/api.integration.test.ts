@@ -610,6 +610,28 @@ describe.skipIf(!available)('API + PostgreSQL', () => {
       expect(empty.status).toBe(200);
       expect((empty.body.checks as Row[]).map((c) => c.code)).toContain('no_income');
     });
+
+    it('pagamento solto da conta recebe sugestão de fatura (mesmo valor, vencimento próximo) e o vínculo marca a fatura como paga', async () => {
+      const accountId = (await json('POST', '/accounts', { name: 'Conta Vínculo' })).body.id;
+      const list = async () => (await json('GET', `/invoices?card_id=${cardId}`)).body;
+      const inv = (await list()).invoices.find((i: Row) => i.due_date.startsWith(months[1]));
+      const paidOn = `${months[1]}-14`; // um dia antes do vencimento (dia 15)
+      const p = await json('POST', '/transactions', {
+        type: 'invoice_payment', description: 'PAGAMENTO CARTAO CREDITO', account_id: accountId, paid_on: paidOn, occurred_on: paidOn, status: 'paid', total_cents: 123400,
+      });
+      expect(p.status).toBe(201);
+
+      const before = (await list()).unlinked_payments.find((x: Row) => x.id === p.body.id);
+      expect(before).toMatchObject({ account_name: 'Conta Vínculo', suspicious: false, suggestion: { invoice_id: inv.id, confidence: 'alta' } });
+      expect(before.candidate_invoice_ids).toContain(inv.id);
+      // As opções vêm de todos os cartões, mesmo filtrando por um só.
+      expect((await list()).linkable_invoices.some((i: Row) => i.id === inv.id)).toBe(true);
+
+      expect((await json('PATCH', `/transactions/${p.body.id}`, { invoice_id: inv.id })).status).toBe(200);
+      const after = await list();
+      expect(after.unlinked_payments.find((x: Row) => x.id === p.body.id)).toBeUndefined();
+      expect(after.invoices.find((i: Row) => i.id === inv.id)).toMatchObject({ status: 'paid' });
+    });
   });
 
   describe('orçamento, comparação e assinaturas', () => {

@@ -1,6 +1,7 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
-import { api, type Card, type Invoice, type InstallmentsResponse, type InvoiceDetail } from '../api';
+import { Link } from 'react-router-dom';
+import { api, type Card, type Invoice, type InstallmentsResponse, type InvoiceDetail, type InvoicesResponse, type LinkableInvoice, type UnlinkedPayment } from '../api';
 import { Badge, Empty, ErrorBox, Field, Loading, Modal, MoneyField, Panel } from '../components';
 import { brl, dateBR, monthShort, todayISO } from '../format';
 import { useLookups, useRefresh } from '../hooks';
@@ -186,6 +187,70 @@ function InstallmentsPanel({ cardId }: { cardId: number | 'all' }) {
   );
 }
 
+/**
+ * Pagamentos que saíram da conta corrente (vieram do extrato) e ainda não foram ligados à fatura do cartão.
+ * Sem o vínculo a fatura continua "pendente" e o mesmo dinheiro é contado duas vezes na previsão.
+ */
+function UnlinkedPaymentsPanel({ payments, options, busy, error, onLink, onLinkAll }: {
+  payments: UnlinkedPayment[]; options: LinkableInvoice[]; busy: boolean; error: unknown;
+  onLink: (id: number, invoiceId: number) => void; onLinkAll: (pairs: { id: number; invoice_id: number }[]) => void;
+}) {
+  const [showAll, setShowAll] = useState<Set<number>>(new Set());
+  const byId = new Map(options.map((o) => [o.id, o]));
+  const label = (o: LinkableInvoice) => `${o.card_name} — vence ${dateBR(o.due_date)} — ${brl(o.amount_cents)}`;
+  const sure = payments.flatMap((p) => (p.suggestion?.confidence === 'alta' ? [{ id: p.id, invoice_id: p.suggestion.invoice_id }] : []));
+
+  return (
+    <Panel
+      title="Pagamentos de fatura que saíram da conta"
+      action={sure.length > 1 ? <button className="btn small primary" disabled={busy} onClick={() => onLinkAll(sure)}>Vincular as {sure.length} sugestões certeiras</button> : undefined}
+    >
+      <p className="muted small">
+        Estes pagamentos vieram do extrato da <strong>conta corrente</strong> e ainda não estão ligados à fatura do <strong>cartão</strong>. Ligue cada um à fatura que ele pagou:
+        a fatura passa para “Paga” e deixa de contar de novo em “ainda falta pagar”. Não use “Pagar fatura”, que criaria outro pagamento.
+      </p>
+      <ul className="rows">
+        {payments.map((p) => {
+          const s = p.suggestion ? byId.get(p.suggestion.invoice_id) : undefined;
+          const ids = showAll.has(p.id) ? options.map((o) => o.id) : p.candidate_invoice_ids;
+          return (
+            <li className="row" key={p.id} style={{ flexWrap: 'wrap' }}>
+              <div className="row-main" style={{ minWidth: 240 }}>
+                <strong>{p.description}</strong>
+                <div className="row-sub">
+                  {p.paid_on ? dateBR(p.paid_on) : 'sem data'} · {brl(p.total_cents)}{p.account_name ? ` · saiu da conta ${p.account_name}` : ''}
+                </div>
+                {p.suspicious && (
+                  <div className="row-sub">
+                    <Badge tone="warn">Não parece pagamento de fatura</Badge> Se for outra coisa, mude o tipo em <Link to="/lancamentos">Lançamentos</Link>.
+                  </div>
+                )}
+                {s && p.suggestion && (
+                  <div className="row-sub">
+                    <Badge tone={p.suggestion.confidence === 'alta' ? 'good' : 'info'}>Sugestão {p.suggestion.confidence === 'alta' ? 'certeira' : '(confira)'}</Badge>
+                    {label(s)} <span title={p.suggestion.reason}>ⓘ</span>
+                  </div>
+                )}
+              </div>
+              <div className="row-amount" style={{ flex: '1 1 260px', maxWidth: 380, alignItems: 'stretch' }}>
+                {s && <button className="btn small primary" disabled={busy} onClick={() => onLink(p.id, s.id)}>Vincular</button>}
+                <select aria-label="Escolher outra fatura" defaultValue="" disabled={busy} style={{ width: '100%' }} onChange={(e) => e.target.value && onLink(p.id, Number(e.target.value))}>
+                  <option value="">{s ? 'Outra fatura…' : 'Vincular à fatura…'}</option>
+                  {ids.flatMap((id) => { const o = byId.get(id); return o ? [<option key={o.id} value={o.id}>{label(o)}</option>] : []; })}
+                </select>
+                {!showAll.has(p.id) && (
+                  <button className="btn small" type="button" onClick={() => setShowAll(new Set(showAll).add(p.id))}>Mostrar todas as faturas</button>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      <ErrorBox error={error} />
+    </Panel>
+  );
+}
+
 export default function CardsPage({ month }: { month: string }) {
   void month;
   const { cards, accounts } = useLookups();
@@ -195,8 +260,13 @@ export default function CardsPage({ month }: { month: string }) {
   const [totalFor, setTotalFor] = useState<Invoice | null>(null);
   const [newFor, setNewFor] = useState<Card | null>(null);
   const [selected, setSelected] = useState<number | 'all'>('all');
-  const q = useQuery({ queryKey: ['invoices', selected], queryFn: () => api.get<{ invoices: Invoice[]; unlinked_payments: { id: number; description: string; total_cents: number; paid_on: string | null; card_id: number | null }[] }>(`/invoices${selected === 'all' ? '' : `?card_id=${selected}`}`) });
+  const q = useQuery({ queryKey: ['invoices', selected], queryFn: () => api.get<InvoicesResponse>(`/invoices${selected === 'all' ? '' : `?card_id=${selected}`}`) });
   const link = useMutation({ mutationFn: ({ id, invoice_id }: { id: number; invoice_id: number }) => api.patch(`/transactions/${id}`, { invoice_id }), onSuccess: refresh });
+  // Vincula várias de uma vez (as sugestões de confiança alta), uma por uma para respeitar as regras de cada lançamento.
+  const linkAll = useMutation({
+    mutationFn: async (pairs: { id: number; invoice_id: number }[]) => { for (const p of pairs) await api.patch(`/transactions/${p.id}`, { invoice_id: p.invoice_id }); },
+    onSuccess: refresh,
+  });
   const delCard = useMutation({ mutationFn: (id: number) => api.del(`/cards/${id}`), onSuccess: () => { setSelected('all'); refresh(); } });
 
   const invoices = q.data?.invoices ?? [];
@@ -234,18 +304,14 @@ export default function CardsPage({ month }: { month: string }) {
       })()}
 
       {(q.data?.unlinked_payments.length ?? 0) > 0 && (
-        <Panel title="Pagamentos de fatura sem fatura vinculada">
-          <p className="muted small">Vincule cada pagamento à fatura correta. Sem vínculo, a fatura continua “pendente” e pode ser contada duas vezes na previsão.</p>
-          <ul className="rows">{q.data!.unlinked_payments.map((p) => (
-            <li className="row" key={p.id}>
-              <div className="row-main"><strong>{p.description}</strong><div className="row-sub">{dateBR(p.paid_on)} · {brl(p.total_cents)}</div></div>
-              <select aria-label="Vincular à fatura" defaultValue="" onChange={(e) => e.target.value && link.mutate({ id: p.id, invoice_id: Number(e.target.value) })}>
-                <option value="">Vincular à fatura…</option>
-                {invoices.filter((i) => i.status !== 'paid' && (!p.card_id || i.card_id === p.card_id)).map((i) => <option key={i.id} value={i.id}>{i.card_name} — vence {dateBR(i.due_date)} — {brl(i.amount_cents)}</option>)}
-              </select>
-            </li>))}</ul>
-          <ErrorBox error={link.error} />
-        </Panel>
+        <UnlinkedPaymentsPanel
+          payments={q.data!.unlinked_payments}
+          options={q.data!.linkable_invoices}
+          busy={link.isPending || linkAll.isPending}
+          error={link.error ?? linkAll.error}
+          onLink={(id, invoice_id) => link.mutate({ id, invoice_id })}
+          onLinkAll={(pairs) => linkAll.mutate(pairs)}
+        />
       )}
 
       <InstallmentsPanel cardId={selected} />
