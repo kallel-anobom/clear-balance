@@ -7,6 +7,7 @@ import { MONTH_RE, monthOf, todayISO } from '../lib.js';
 import { countAiCall, getAiState } from '../services/ai.js';
 import { loadChecks } from '../services/checksData.js';
 import { loadOutlook, MAX_OUTLOOK_MONTHS } from '../services/outlookData.js';
+import { loadReport } from '../services/reportData.js';
 import { buildOverview, loadComparison } from '../services/overviewData.js';
 import { buildFacts, writeSummary } from '../services/summary.js';
 import { loadSubscriptions } from './subscriptions.js';
@@ -24,6 +25,10 @@ export async function overviewRoutes(app: FastifyInstance) {
 
   // Conferência dos números do mês: checagens determinísticas (sem IA) de onde o valor pode estar errado.
   app.get<{ Querystring: { month?: string } }>('/overview/checks', async (req) => loadChecks(monthOrFail(req.query.month)));
+
+  // Relatório para baixar: conferência, previsão e faturas do mês (e vizinhos). Sem descrições, salvo `lines=1`.
+  app.get<{ Querystring: { month?: string; lines?: string } }>('/overview/report', async (req) =>
+    loadReport(monthOrFail(req.query.month), req.query.lines === '1'));
 
   // Quanto vai sair da conta nos próximos meses: o que já está lançado nas faturas e a estimativa ao fechar.
   app.get<{ Querystring: { from?: string; months?: string } }>('/overview/outlook', async (req) => {

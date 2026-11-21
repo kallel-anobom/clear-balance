@@ -3,6 +3,7 @@ import { computeChecks, type CheckInput, type InvoiceCheckRow } from '../src/ser
 import { buildOutlookMonth, estimateInvoice, type InvoiceInfo } from '../src/services/outlook.js';
 
 const TODAY = '2026-11-21';
+const TODAY_FRESH = '2026-11-20';
 
 const info = (over: Partial<InvoiceInfo> = {}): InvoiceInfo => ({
   invoice_id: 1, card_id: 1, card_name: 'Cartão A', due_date: '2026-12-09', closing_date: '2026-12-02',
@@ -80,6 +81,25 @@ describe('conferência dos números', () => {
     const r = computeChecks(base({ invoices: [inv()] }, [info({ variable_cents: 10_000 })], [100_000, 100_000, 100_000]));
     expect(r.certain_pct).toBeLessThan(70);
     expect(r.checks.map((c) => c.code)).toContain('mostly_estimate');
+  });
+
+  it('limite do mês: vermelho se o já lançado passa, amarelo se só o esperado passa, nada sem limite', () => {
+    const cheap = [info({ variable_cents: 600_000, last_purchase_on: TODAY_FRESH })];
+    expect(codes(base({ invoices: [inv()], limit_cents: 1_500_000 }, cheap, [600_000]))).not.toContain('over_limit');
+    expect(codes(base({ invoices: [inv()] }, cheap, [600_000]))).not.toContain('over_limit');
+    // Lançado 6.000 e esperado 9.000 (média alta): passa só na estimativa.
+    const warn = computeChecks(base({ invoices: [inv()], limit_cents: 800_000 }, cheap, [900_000]));
+    expect(warn.checks.find((c) => c.code === 'over_limit')).toMatchObject({ level: 'warn' });
+    // Já lançado acima do limite: vermelho, e o detalhe traz o excesso.
+    const bad = computeChecks(base({ invoices: [inv()], limit_cents: 500_000 }, cheap, [600_000]));
+    const c = bad.checks.find((x) => x.code === 'over_limit')!;
+    expect(c.level).toBe('bad');
+    expect(c.detail).toContain('R$ 1.000,00');
+  });
+
+  it('fatura desatualizada manda para Cartões (onde se informa o valor parcial)', () => {
+    const r = computeChecks(base({ invoices: [inv()] }, [info({ last_purchase_on: '2026-11-10' })]));
+    expect(r.checks.find((c) => c.code === 'stale_invoices')?.action?.to).toBe('/cartoes');
   });
 
   it('ordena do mais grave para o menos grave', () => {

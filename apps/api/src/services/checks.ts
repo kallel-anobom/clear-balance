@@ -48,6 +48,8 @@ export interface CheckInput {
   scheduled_income_cents: number;
   uncategorized: { count: number; total_cents: number };
   duplicates: DuplicateGroup[];
+  /** Limite de saída do mês definido pelo usuário (Configurações); null = sem alerta de limite. */
+  limit_cents?: number | null;
 }
 
 export interface ChecksResult {
@@ -150,8 +152,8 @@ export function computeChecks(input: CheckInput): ChecksResult {
       code: 'stale_invoices',
       level: 'warn',
       title: `${stale.length} ${stale.length === 1 ? 'fatura aberta está desatualizada' : 'faturas abertas estão desatualizadas'}`,
-      detail: `${stale.map((i) => i.card_name).join(', ')}: a última compra lançada tem mais de 3 dias. Reimporte a fatura aberta para atualizar.`,
-      action: { label: 'Importar fatura', to: '/importar' },
+      detail: `${stale.map((i) => i.card_name).join(', ')}: a última compra lançada (ou o valor parcial informado) tem mais de 3 dias. Reimporte a fatura aberta ou informe o valor parcial que o app do banco mostra hoje.`,
+      action: { label: 'Atualizar faturas', to: '/cartoes' },
     });
   }
 
@@ -215,12 +217,38 @@ export function computeChecks(input: CheckInput): ChecksResult {
     });
   }
 
+  // 12. Saída prevista do mês contra o limite que o usuário definiu.
+  run.n++;
+  if (input.limit_cents != null && input.limit_cents > 0) {
+    const limit = input.limit_cents;
+    const label = `${month.slice(5, 7)}/${month.slice(0, 4)}`;
+    const certain = outlook.paid_cents + outlook.committed_cents;
+    const expected = outlook.paid_cents + outlook.estimated_cents;
+    if (certain > limit) {
+      raise({
+        code: 'over_limit',
+        level: 'bad',
+        title: `A saída de ${label} já passa do seu limite`,
+        detail: `Só com o que já está lançado ou pago são ${formatBRL(certain)}, ${formatBRL(certain - limit)} acima do limite de ${formatBRL(limit)}. Com as estimativas, o esperado é ${formatBRL(expected)}.`,
+        action: { label: 'Ver faturas', to: '/cartoes' },
+      });
+    } else if (expected > limit) {
+      raise({
+        code: 'over_limit',
+        level: 'warn',
+        title: `A saída esperada de ${label} passa do seu limite`,
+        detail: `Esperado ${formatBRL(expected)} (${formatBRL(certain)} já lançados ou pagos, o resto é estimativa) contra o limite de ${formatBRL(limit)}: ${formatBRL(expected - limit)} acima se a estimativa se confirmar.`,
+        action: { label: 'Ver faturas', to: '/cartoes' },
+      });
+    }
+  }
+
   const order: Record<CheckLevel, number> = { bad: 0, warn: 1, info: 2 };
   checks.sort((a, b) => order[a.level] - order[b.level]);
   const failed = new Set(checks.map((c) => c.code));
   const CODES = [
     'invoice_sum_mismatch', 'invoice_negative', 'invoice_overdue', 'invoice_outlier', 'thin_history', 'stale_invoices',
-    'possible_duplicates', 'outlook_mismatch', 'no_income', 'uncategorized', 'mostly_estimate',
+    'possible_duplicates', 'outlook_mismatch', 'no_income', 'uncategorized', 'mostly_estimate', 'over_limit',
   ];
   return {
     month,

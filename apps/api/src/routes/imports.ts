@@ -495,7 +495,7 @@ async function commit(db: PoolClient, b: CommitBody) {
   if (card && b.invoice_due_date) {
     forcedInvoice = await findOrCreateInvoice(db, card.id, invoiceDatesForDue(card, b.invoice_due_date));
     if (b.statement_total_cents != null) {
-      await db.query('update invoices set statement_total_cents = $2 where id = $1', [forcedInvoice, b.statement_total_cents]);
+      await db.query('update invoices set statement_total_cents = $2, partial_total_cents = null, partial_on = null where id = $1', [forcedInvoice, b.statement_total_cents]);
     }
   }
 

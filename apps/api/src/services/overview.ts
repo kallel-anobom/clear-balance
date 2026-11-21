@@ -48,6 +48,9 @@ export interface InvoiceRow {
   due_date: string;
   closing_date: string | null;
   statement_total_cents: number | null;
+  /** Total parcial informado pelo usuário (fatura aberta); só vale enquanto não há total confirmado. */
+  partial_total_cents?: number | null;
+  partial_on?: string | null;
   paid_on: string | null;
   lines_total_cents: number;
   lines_count: number;
@@ -156,10 +159,10 @@ export function isCardPurchase(t: TxRow): boolean {
   return t.type === 'expense' && t.card_id !== null;
 }
 
-/** Valor da fatura: o total confirmado, ou a soma das compras lançadas (estimado). */
+/** Valor da fatura: o total confirmado, ou o maior entre as compras lançadas e o valor parcial informado (estimado). */
 export function invoiceAmount(inv: InvoiceRow): { cents: number; estimated: boolean } {
   if (inv.statement_total_cents !== null) return { cents: inv.statement_total_cents, estimated: false };
-  return { cents: inv.lines_total_cents, estimated: true };
+  return { cents: Math.max(inv.lines_total_cents, inv.partial_total_cents ?? 0), estimated: true };
 }
 
 export function computeOverview(input: OverviewInput) {

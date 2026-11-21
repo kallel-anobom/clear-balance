@@ -37,6 +37,28 @@ describe('estimateInvoice', () => {
     expect(closed).toMatchObject({ basis: 'closed', committed_cents: 75000, estimated_cents: 75000 });
   });
 
+  it('valor parcial informado vale como já lançado quando é maior que as compras', () => {
+    // Fatura que não dá para importar (sem compras): só o total parcial que o app do banco mostra.
+    const e = estimateInvoice(inv({ partial_total_cents: 337294, partial_on: TODAY, lines_count: 0 }), [200000], TODAY);
+    expect(e).toMatchObject({ basis: 'estimate', committed_cents: 337294, estimated_cents: 337294, is_stale: false });
+    // Com parcelas já previstas dentro do parcial: o variável é o que sobra.
+    const p = estimateInvoice(inv({ fixed_cents: 90315, partial_total_cents: 190000, partial_on: TODAY }), [250000], TODAY);
+    expect(p).toMatchObject({ committed_cents: 190000, estimated_cents: 90315 + 250000 });
+    // Compras lançadas maiores que o parcial: valem as compras.
+    const l = estimateInvoice(inv({ variable_cents: 400000, partial_total_cents: 337294, partial_on: TODAY, last_purchase_on: TODAY }), [], TODAY);
+    expect(l.committed_cents).toBe(400000);
+  });
+
+  it('o parcial renova o frescor, e envelhece como qualquer lançamento', () => {
+    expect(estimateInvoice(inv({ partial_total_cents: 100, partial_on: '2026-11-18' }), [1000], TODAY).is_stale).toBe(false);
+    expect(estimateInvoice(inv({ partial_total_cents: 100, partial_on: '2026-11-10' }), [1000], TODAY).is_stale).toBe(true);
+  });
+
+  it('total confirmado substitui o parcial', () => {
+    const e = estimateInvoice(inv({ statement_total_cents: 500000, partial_total_cents: 800000, partial_on: TODAY }), [], TODAY);
+    expect(e).toMatchObject({ basis: 'confirmed', committed_cents: 500000 });
+  });
+
   it('frescor: avisa quando o último lançamento tem mais de 3 dias, ou não há nenhum', () => {
     const base = { variable_cents: 10000, lines_count: 1 };
     expect(estimateInvoice(inv({ ...base, last_purchase_on: '2026-11-17' }), [50000], TODAY)).toMatchObject({ stale_days: 2, is_stale: false });

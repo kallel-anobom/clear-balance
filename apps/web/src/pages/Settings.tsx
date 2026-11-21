@@ -240,6 +240,33 @@ function AiPanel() {
   );
 }
 
+/** Limite de saída do mês (ex.: o salário líquido): só alimenta o alerta da Conferência, não bloqueia nada. */
+function LimitPanel() {
+  const refresh = useRefresh();
+  const settings = useQuery({ queryKey: ['settings'], queryFn: () => api.get<AppSettings>('/settings') });
+  const saved = settings.data?.monthly_limit_cents ?? null;
+  const [v, setV] = useState<number | null | undefined>(undefined);
+  const value = v === undefined ? saved : v;
+  const save = useMutation({
+    mutationFn: (cents: number | null) => api.put('/settings', { monthly_limit_cents: cents }),
+    onSuccess: () => { setV(undefined); refresh(); },
+  });
+  return (
+    <Panel title="Limite de saída do mês">
+      <p className="muted small">
+        Defina quanto você pode gastar por mês (por exemplo, o salário líquido). A <strong>Conferência</strong> avisa quando a saída do mês já passa do limite,
+        ou quando só passa se as estimativas se confirmarem. Não bloqueia nada. Deixe em branco para desligar o alerta.
+      </p>
+      <div className="inline-form">
+        <MoneyField label="Limite mensal" value={value} onChange={setV} />
+        <button className="btn primary" disabled={v === undefined || v === null || save.isPending} onClick={() => v != null && save.mutate(v)}>Salvar</button>
+        {saved !== null && <button className="btn" disabled={save.isPending} onClick={() => save.mutate(null)}>Remover limite</button>}
+      </div>
+      <ErrorBox error={save.error} />
+    </Panel>
+  );
+}
+
 export default function SettingsPage() {
   const { accounts } = useLookups();
   const refresh = useRefresh();
@@ -318,6 +345,8 @@ export default function SettingsPage() {
         </div>
         <ErrorBox error={saveNames.error} />
       </Panel>
+
+      <LimitPanel />
 
       <BudgetPanel />
 
