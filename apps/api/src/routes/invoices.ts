@@ -5,6 +5,7 @@ import { HttpError, badRequest, notFound } from '../errors.js';
 import { isValidDate, todayISO } from '../lib.js';
 import { invoiceAmount, type InvoiceRow } from '../services/overview.js';
 import { invoiceDatesForDue, findOrCreateInvoice, syncInvoicePaid } from '../services/invoices.js';
+import { suggestPaymentLinks } from '../services/paymentLinks.js';
 import { createTransaction } from '../services/transactions.js';
 
 const date = z.string().refine(isValidDate, 'Data inválida.');
@@ -41,10 +42,24 @@ export async function invoiceRoutes(app: FastifyInstance) {
     }
     const { rows } = await pool.query(`${INVOICE_SELECT} ${where} order by i.due_date desc`, params);
     const unlinked = await pool.query(
-      `select t.id, t.description, t.total_cents, t.paid_on, t.card_id, t.account_id from transactions t
+      `select t.id, t.description, t.total_cents, t.paid_on, t.card_id, t.account_id, a.name as account_name
+       from transactions t left join accounts a on a.id = t.account_id
        where t.type = 'invoice_payment' and t.invoice_id is null order by t.paid_on desc nulls last`,
     );
-    return { invoices: rows.map(decorate), unlinked_payments: unlinked.rows };
+    // Sugestão de vínculo: usa as faturas em aberto de todos os cartões (não só do filtro da tela).
+    let openInvoices = rows;
+    if (req.query.card_id) openInvoices = (await pool.query(`${INVOICE_SELECT} order by i.due_date desc`)).rows;
+    const linkable = openInvoices
+      .map(decorate)
+      .filter((i) => i.status !== 'paid')
+      .map((i) => ({ id: i.id, card_id: i.card_id, card_name: i.card_name, due_date: i.due_date, amount_cents: i.amount_cents }));
+    const links = suggestPaymentLinks(unlinked.rows, linkable);
+    return {
+      invoices: rows.map(decorate),
+      unlinked_payments: unlinked.rows.map((p) => ({ ...p, ...links.get(p.id) })),
+      // Faturas em aberto de todos os cartões, para escolher o vínculo (independe do cartão filtrado na tela).
+      linkable_invoices: linkable,
+    };
   });
 
   app.get<{ Params: { id: string } }>('/invoices/:id', async (req) => {

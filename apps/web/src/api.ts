@@ -103,6 +103,17 @@ export interface Invoice {
 }
 export interface InvoiceDetail extends Invoice { purchases: Tx[]; payments: Tx[] }
 
+/** Pagamento de fatura que saiu da conta e ainda não foi ligado a uma fatura. */
+export interface UnlinkedPayment {
+  id: number; description: string; total_cents: number; paid_on: string | null;
+  card_id: number | null; account_id: number | null; account_name: string | null;
+  suggestion: { invoice_id: number; confidence: 'alta' | 'media'; reason: string } | null;
+  candidate_invoice_ids: number[];
+  suspicious: boolean;
+}
+export interface LinkableInvoice { id: number; card_id: number; card_name: string; due_date: string; amount_cents: number }
+export interface InvoicesResponse { invoices: Invoice[]; unlinked_payments: UnlinkedPayment[]; linkable_invoices: LinkableInvoice[] }
+
 export interface Recurring {
   id: number; description: string; type: 'expense' | 'income'; category_id: number | null; category_name: string | null;
   account_id: number | null; frequency: 'monthly' | 'yearly'; day_of_month: number | null; month_of_year: number | null;
