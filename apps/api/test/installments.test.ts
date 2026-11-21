@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { detectInstallment, installmentGroup } from '../src/importer/installments.js';
-import { cleanOcrText, parseStatementText } from '../src/importer/pdf.js';
+import { detectInstallment, installmentGroup, pickInstallmentGroup, type GroupMember } from '../src/importer/installments.js';
+import { cleanOcrText, isStatementPaymentLine, parseStatementText } from '../src/importer/pdf.js';
 import { dateInInvoiceCycle } from '../src/services/installments.js';
 
 describe('detectInstallment', () => {
@@ -80,5 +80,60 @@ describe('OCR', () => {
   it('OCR com espaço antes da vírgula ainda lê o valor', () => {
     const r = parseStatementText('04/10 LOJA 1.234 ,56', { kind: 'card', refMonth: '2026-10', ocr: true });
     expect(r.rows[0].abs_cents).toBe(123456);
+  });
+});
+
+describe('pickInstallmentGroup', () => {
+  const g = 'abc';
+  const m = (group: string, no: number, cents: number, is_projected = false): GroupMember => ({ group, no, cents, is_projected });
+
+  it('sem parcelas gravadas usa o grupo base', () => {
+    expect(pickInstallmentGroup(g, 2, 10000, [])).toEqual({ group: g, existing: null });
+  });
+
+  it('mesma parcela com valor compatível é a mesma compra (a última pode variar centavos)', () => {
+    const r = pickInstallmentGroup(g, 2, 10050, [m(g, 2, 10000)]);
+    expect(r.group).toBe(g);
+    expect(r.existing?.no).toBe(2);
+  });
+
+  it('parcela já confirmada com valor bem diferente é outra compra: grupo novo', () => {
+    expect(pickInstallmentGroup(g, 2, 4000, [m(g, 2, 10000)])).toEqual({ group: `${g}~2`, existing: null });
+    expect(pickInstallmentGroup(g, 2, 2500, [m(g, 2, 10000), m(`${g}~2`, 2, 4000)])).toEqual({ group: `${g}~3`, existing: null });
+  });
+
+  it('a parcela seguinte vai para o grupo cujo valor combina', () => {
+    const members = [m(g, 2, 10000), m(g, 3, 10000, true), m(`${g}~2`, 2, 4000), m(`${g}~2`, 3, 4000, true)];
+    expect(pickInstallmentGroup(g, 3, 4000, members).existing).toBe(members[3]);
+    expect(pickInstallmentGroup(g, 3, 10000, members).existing).toBe(members[1]);
+  });
+
+  it('vaga só prevista com valor diferente confirma a prevista (preço mudou)', () => {
+    const members = [m(g, 2, 10000), m(g, 3, 10000, true)];
+    const r = pickInstallmentGroup(g, 3, 13000, members);
+    expect(r.group).toBe(g);
+    expect(r.existing).toBe(members[1]);
+  });
+});
+
+describe('total da fatura no PDF', () => {
+  const text = [
+    'Total a pagar', 'R$ 978,05', 'Vence em', '04/11/2026',
+    'Resumo da fatura', 'Total da fatura de setembro R$ 1.031,11', 'Total R$ 978,05',
+    '04/10 Pagamento da fatura de outubro/2026 R$ 1.031,11',
+    '04/09 MP*LOJA Parcela 2 de 12 R$ 149,08', '15/09 MP*LOJA Parcela 2 de 12 R$ 754,07', '12/10 MP*OUTRA R$ 74,90',
+  ].join('\n');
+
+  it('usa "Total a pagar" (valor na linha seguinte) e não o total da fatura anterior', () => {
+    const r = parseStatementText(text, { kind: 'card', refMonth: '2026-11' });
+    expect(r.detected_total_cents).toBe(97805);
+  });
+
+  it('o pagamento da fatura anterior não entra na soma que confere o total', () => {
+    const r = parseStatementText(text, { kind: 'card', refMonth: '2026-11' });
+    expect(r.reconciliation_cents).toBe(0);
+    expect(isStatementPaymentLine('Pagamento da fatura de outubro/2026')).toBe(true);
+    expect(isStatementPaymentLine('PAGAMENTO RECEBIDO')).toBe(true);
+    expect(isStatementPaymentLine('MP*MERCADOLIVRE Parcela 2 de 12')).toBe(false);
   });
 });

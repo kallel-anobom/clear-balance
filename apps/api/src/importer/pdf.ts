@@ -1,4 +1,4 @@
-import { parseDate, parseMoney, todayISO } from '../lib.js';
+import { normalizeText, parseDate, parseMoney, todayISO } from '../lib.js';
 import { parseLayoutLines } from './layout.js';
 import type { ParsedRow, TargetKind } from './types.js';
 
@@ -67,7 +67,17 @@ const DATE_AT_START = new RegExp(
 // Valor no formato brasileiro com vírgula decimal obrigatória (evita confundir com números de documento).
 const MONEY_TOKEN = /(?:R\$\s?)?[-+]?\(?\d{1,3}(?:\.\d{3})*,\d{2}\)?-?(?:\s?[CD])?(?=\s|$)/g;
 
-const TOTAL_RE = /(total (da |desta )?fatura|valor total( da fatura)?|total a pagar|total desta fatura)/i;
+// "Total a pagar" e afins são o total desta fatura; "Total da fatura" genérico pode ser o da fatura anterior
+// (ex.: "Total da fatura de setembro" no resumo), por isso só vale se nenhum total forte aparecer.
+const STRONG_TOTAL_RE = /(total a pagar|valor total( da fatura)?|total desta fatura)/i;
+const WEAK_TOTAL_RE = /total (da )?fatura/i;
+const PREVIOUS_TOTAL_RE = /anterior|fatura de (jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)/i;
+/** Pagamento da fatura anterior dentro da própria fatura: não faz parte do total a pagar. */
+export function isStatementPaymentLine(description: string): boolean {
+  return /pagamento (recebido|efetuado|d[ae] fatura|fatura|on.?line)|pgto (fatura|recebido)|credito de pagamento|obrigado pelo pagamento|debito autom/.test(
+    normalizeText(description),
+  );
+}
 const DUE_RE = /vencimento\D{0,25}(\d{2}\/\d{2}\/\d{4})/i;
 
 /**
@@ -84,17 +94,22 @@ export function parseStatementText(
   let rows: ParsedRow[] = [];
   let candidates = 0;
   let detectedTotal: number | null = null;
+  let weakTotal: number | null = null;
   let detectedDue: string | null = null;
   let yearless = false;
 
-  for (const line of lines) {
+  for (const [lineNo, line] of lines.entries()) {
     if (detectedDue === null) {
       const d = line.match(DUE_RE);
       if (d) detectedDue = parseDate(d[1]);
     }
-    if (detectedTotal === null && TOTAL_RE.test(line)) {
-      const tokens = line.match(MONEY_TOKEN);
+    if (detectedTotal === null && STRONG_TOTAL_RE.test(line)) {
+      // O valor pode estar na mesma linha ou na seguinte (layout "Total a pagar" / "R$ 978,05").
+      const tokens = line.match(MONEY_TOKEN) ?? (/^(?:R\$\s?)?[\d.]+,\d{2}$/.test(lines[lineNo + 1] ?? '') ? lines[lineNo + 1].match(MONEY_TOKEN) : null);
       if (tokens) detectedTotal = parseMoney(tokens[tokens.length - 1]);
+    } else if (weakTotal === null && WEAK_TOTAL_RE.test(line) && !PREVIOUS_TOTAL_RE.test(line)) {
+      const tokens = line.match(MONEY_TOKEN);
+      if (tokens) weakTotal = parseMoney(tokens[tokens.length - 1]);
     }
 
     const m = line.match(DATE_AT_START);
@@ -147,6 +162,7 @@ export function parseStatementText(
     });
   }
 
+  detectedTotal ??= weakTotal;
   const warnings: string[] = [];
   let confidence: PdfConfidence = 'ok';
   let reconciliation: number | null = null;
@@ -180,7 +196,7 @@ export function parseStatementText(
       warnings.push(`Só ${rows.length} de ${candidates} linhas com data foram interpretadas.`);
     }
     if (opts.kind === 'card' && detectedTotal !== null) {
-      const net = rows.reduce((s, r) => s + (r.direction === 'out' ? r.abs_cents : -r.abs_cents), 0);
+      const net = rows.filter((r) => !isStatementPaymentLine(r.description)).reduce((s, r) => s + (r.direction === 'out' ? r.abs_cents : -r.abs_cents), 0);
       reconciliation = detectedTotal - net;
       if (reconciliation !== 0) {
         confidence = 'low';

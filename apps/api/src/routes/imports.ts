@@ -6,10 +6,10 @@ import { config } from '../config.js';
 import { HttpError, badRequest } from '../errors.js';
 import { diffDays, isValidDate, monthOf, normalizeText } from '../lib.js';
 import { fingerprint, suggest, type LearnedRule } from '../importer/classify.js';
-import { detectInstallment, installmentGroup } from '../importer/installments.js';
+import { detectInstallment, installmentGroup, pickInstallmentGroup, type GroupMember } from '../importer/installments.js';
 import { parseCsv, type CsvMapping } from '../importer/csv.js';
 import { isXlsx, xlsxToCsv, XlsxError } from '../importer/xlsx.js';
-import { extractPdfText, parseStatementText, PdfError } from '../importer/pdf.js';
+import { extractPdfText, isStatementPaymentLine, parseStatementText, PdfError } from '../importer/pdf.js';
 import { AiError, interpretWithAi } from '../importer/llm.js';
 import { redact } from '../importer/redact.js';
 import { countAiCall, getAiState } from '../services/ai.js';
@@ -244,7 +244,7 @@ export async function importRoutes(app: FastifyInstance) {
     const warnings = [...ai.warnings];
     let reconciliation: number | null = null;
     if (kind === 'card' && classic.detected_total_cents !== null) {
-      const net = ai.rows.reduce((s, r) => s + (r.direction === 'out' ? r.abs_cents : -r.abs_cents), 0);
+      const net = ai.rows.filter((r) => !isStatementPaymentLine(r.description)).reduce((s, r) => s + (r.direction === 'out' ? r.abs_cents : -r.abs_cents), 0);
       reconciliation = classic.detected_total_cents - net;
       if (reconciliation !== 0) warnings.push('A soma das linhas da IA não bate com o total da fatura lido no texto. Confira cada linha.');
     }
@@ -399,16 +399,36 @@ async function enrichPreview({ kind, targetId, rows, skipped, csvInfo, pdfInfo, 
     const infos = withInstallment.map((o) => (o.direction === 'out' ? detectInstallment(o.description) : null));
     const groups = infos.map((i) => (i ? installmentGroup(targetId, i.base, i.total) : null));
     const wanted = [...new Set(groups.filter((g): g is string => !!g))];
-    const existing = new Map<string, ExistingTx & { is_projected: boolean; installment_no: number }>();
+    type Existing = ExistingTx & { is_projected: boolean; installment_no: number; installment_group: string };
+    const rowsByGroup = new Map<string, Existing[]>();
     if (wanted.length) {
-      const { rows: ex } = await pool.query('select * from transactions where installment_group = any($1::text[])', [wanted]);
-      for (const t of ex) existing.set(`${t.installment_group}:${t.installment_no}`, t);
+      // Traz também as variantes (`grupo~2`): compras diferentes na mesma loja com o mesmo número de parcelas.
+      const { rows: ex } = await pool.query(
+        "select * from transactions where split_part(installment_group, '~', 1) = any($1::text[])",
+        [wanted],
+      );
+      for (const t of ex as Existing[]) {
+        const base = t.installment_group.split('~')[0];
+        rowsByGroup.set(base, [...(rowsByGroup.get(base) ?? []), t]);
+      }
     }
+    // Linhas do próprio arquivo contam como já lançadas para as seguintes (duas compras iguais na mesma fatura).
+    const claimed = new Map<string, GroupMember[]>();
     withInstallment.forEach((o, i) => {
       const info = infos[i];
       if (!info) return;
       o.installment = { no: info.no, total: info.total, bare: info.bare };
-      const ex = existing.get(`${groups[i]}:${info.no}`);
+      const base = groups[i]!;
+      const stored = rowsByGroup.get(base) ?? [];
+      const members: GroupMember[] = [
+        ...stored.map((t) => ({ group: t.installment_group, no: t.installment_no, cents: Math.abs(t.total_cents), is_projected: t.is_projected })),
+        ...(claimed.get(base) ?? []),
+      ];
+      const pick = pickInstallmentGroup(base, info.no, o.abs_cents, members);
+      const ex = pick.existing ? stored.find((t) => t.installment_group === pick.group && t.installment_no === info.no) : undefined;
+      if (!ex && o.action !== 'skip') {
+        claimed.set(base, [...(claimed.get(base) ?? []), { group: pick.group, no: info.no, cents: o.abs_cents, is_projected: false }]);
+      }
       if (ex && !ex.is_projected) {
         o.duplicate = { level: 'exact', id: ex.id, description: ex.description, date: txDate(ex), status: ex.status };
         o.action = 'skip';
@@ -417,9 +437,10 @@ async function enrichPreview({ kind, targetId, rows, skipped, csvInfo, pdfInfo, 
         o.duplicate = { level: 'possible', id: ex.id, description: ex.description, date: txDate(ex), status: ex.status };
         o.action = lowConfidence || !o.date ? 'skip' : 'link';
         o.note = `Parcela ${info.no}/${info.total} já prevista pelo sistema. Vincular confirma o valor real, sem duplicar.`;
-      } else if (info.no < info.total) {
+      } else if (info.no < info.total || pick.group !== base) {
         const left = info.total - info.no;
-        o.note = `Compra parcelada (${info.no}/${info.total}): as ${left} parcela(s) restante(s) serão previstas nas próximas faturas.${info.bare ? ' Confira se "' + info.no + '/' + info.total + '" é mesmo parcela.' : ''}`;
+        const other = pick.group !== base ? 'Outra compra parcelada na mesma loja (valor diferente da que já estava lançada): será tratada como compra separada. ' : '';
+        o.note = `${other}Compra parcelada (${info.no}/${info.total})${left > 0 ? `: as ${left} parcela(s) restante(s) serão previstas nas próximas faturas.` : '.'}${info.bare ? ' Confira se "' + info.no + '/' + info.total + '" é mesmo parcela.' : ''}`;
         if (info.bare) o.needs_review = true;
       }
     });
@@ -559,9 +580,15 @@ async function importInstallment(
   date: string,
   signed: number,
 ): Promise<'created' | 'linked'> {
-  const group = installmentGroup(card.id, inst.base, inst.total);
-  const { rows } = await db.query('select id, is_projected from transactions where installment_group = $1 and installment_no = $2', [group, inst.no]);
-  const ex = rows[0];
+  const baseGroup = installmentGroup(card.id, inst.base, inst.total);
+  // Considera também as variantes do grupo (outra compra parcelada na mesma loja com valor diferente).
+  const { rows: stored } = await db.query(
+    "select id, installment_group as \"group\", installment_no as no, abs(total_cents)::int as cents, is_projected from transactions where split_part(installment_group, '~', 1) = $1",
+    [baseGroup],
+  );
+  const pick = pickInstallmentGroup(baseGroup, inst.no, Math.abs(signed), stored as (GroupMember & { id: number })[]);
+  const group = pick.group;
+  const ex = pick.existing ? (stored as { id: number; group: string; no: number; is_projected: boolean }[]).find((m) => m.group === group && m.no === inst.no) : undefined;
   if (ex?.is_projected) {
     await confirmProjectedInstallment(db, ex.id, {
       date, description: base.description, signed_cents: signed, hash: base.import_hash ?? null, batch_id: base.import_batch_id ?? null,
