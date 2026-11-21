@@ -593,6 +593,23 @@ describe.skipIf(!available)('API + PostgreSQL', () => {
       const r = await outlook();
       expect(mine(r.months[1])).toMatchObject({ basis: 'confirmed', committed_cents: 123400, estimated_cents: 123400 });
     });
+
+    it('conferência: valida o mês, aponta total confirmado que não bate e mantém a previsão fechando com a visão do mês', async () => {
+      expect((await json('GET', '/overview/checks?month=xx')).status).toBe(400);
+      const r = await json('GET', `/overview/checks?month=${months[1]}`);
+      expect(r.status).toBe(200);
+      const codes = (r.body.checks as Row[]).map((c) => c.code);
+      // Total confirmado 1.234,00 contra compras lançadas de 300,00.
+      expect(codes).toContain('invoice_sum_mismatch');
+      expect((r.body.checks as Row[])[0]).toMatchObject({ level: 'bad' });
+      // As duas contas de "ainda vai sair" fecham (sem divergência).
+      expect(codes).not.toContain('outlook_mismatch');
+      expect(r.body.total).toBeGreaterThan(r.body.passed);
+      // Mês vazio e isolado: responde sem erro, só com os avisos esperados.
+      const empty = await json('GET', '/overview/checks?month=2031-07');
+      expect(empty.status).toBe(200);
+      expect((empty.body.checks as Row[]).map((c) => c.code)).toContain('no_income');
+    });
   });
 
   describe('orçamento, comparação e assinaturas', () => {

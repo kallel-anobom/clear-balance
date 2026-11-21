@@ -150,6 +150,15 @@ export interface OutlookMonth {
 }
 export interface OutlookResponse { from: string; months: OutlookMonth[] }
 
+export interface CheckItem {
+  code: string;
+  level: 'bad' | 'warn' | 'info';
+  title: string;
+  detail: string;
+  action?: { label: string; to: string };
+}
+export interface ChecksResponse { month: string; checks: CheckItem[]; total: number; passed: number; certain_pct: number | null }
+
 export interface Overview {
   month: string; today: string;
   spending: {
