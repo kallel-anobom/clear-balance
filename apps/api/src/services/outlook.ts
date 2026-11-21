@@ -14,6 +14,9 @@ export interface InvoiceInfo {
   due_date: string;
   closing_date: string | null;
   statement_total_cents: number | null;
+  /** Valor parcial informado pelo usuário e a data em que ele foi informado (fatura aberta sem as compras). */
+  partial_total_cents?: number | null;
+  partial_on?: string | null;
   /** Parcelas e lançamentos de recorrência: valor que já se sabe que virá. */
   fixed_cents: number;
   /** Demais compras lançadas até agora. */
@@ -56,7 +59,9 @@ function cycleStart(closing: string): string {
  * para a mais antiga. Só as primeiras 3 entram na média.
  */
 export function estimateInvoice(info: InvoiceInfo, history: number[], today: string): InvoiceEstimate {
-  const launched = info.fixed_cents + info.variable_cents;
+  // O valor parcial informado vale como "já lançado" quando é maior que as compras (fatura que não dá para importar ainda).
+  const launched = Math.max(info.fixed_cents + info.variable_cents, info.partial_total_cents ?? 0);
+  const variableNow = launched - info.fixed_cents;
   const used = history.filter((v) => v > 0).slice(0, HISTORY_INVOICES);
   const avg = used.length ? Math.round(used.reduce((a, b) => a + b, 0) / used.length) : null;
   const base = { ...info, history_count: used.length, avg_variable_cents: avg, stale_days: null, is_stale: false };
@@ -71,12 +76,14 @@ export function estimateInvoice(info: InvoiceInfo, history: number[], today: str
 
   // Fatura aberta: frescor dos dados (só faz sentido depois que o ciclo começou).
   const started = info.closing_date === null || cycleStart(info.closing_date) <= today;
-  const staleDays = info.last_purchase_on ? diffDays(today, info.last_purchase_on) : null;
+  // O frescor considera a compra mais recente e também a data em que o valor parcial foi informado.
+  const lastUpdate = [info.last_purchase_on, info.partial_on ?? null].filter((d): d is string => !!d).sort().pop() ?? null;
+  const staleDays = lastUpdate ? diffDays(today, lastUpdate) : null;
   const isStale = started && (staleDays === null || staleDays > STALE_AFTER_DAYS);
   const fresh = { ...base, stale_days: staleDays, is_stale: isStale };
 
   if (avg === null) return { ...fresh, committed_cents: launched, estimated_cents: launched, basis: 'launched_only' };
-  return { ...fresh, committed_cents: launched, estimated_cents: info.fixed_cents + Math.max(info.variable_cents, avg), basis: 'estimate' };
+  return { ...fresh, committed_cents: launched, estimated_cents: info.fixed_cents + Math.max(variableNow, avg), basis: 'estimate' };
 }
 
 export interface OutlookMonth {

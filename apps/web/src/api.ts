@@ -100,6 +100,8 @@ export interface Invoice {
   statement_total_cents: number | null; lines_total_cents: number; lines_mine_cents: number; lines_count: number;
   amount_cents: number; amount_estimated: boolean; status: 'open' | 'closed' | 'paid'; overdue: boolean;
   mismatch_cents: number | null;
+  /** Total parcial informado (fatura aberta que ainda não dá para importar) e a data em que foi informado. */
+  partial_total_cents: number | null; partial_on: string | null;
 }
 export interface InvoiceDetail extends Invoice { purchases: Tx[]; payments: Tx[] }
 
@@ -239,7 +241,7 @@ export interface AiSettings { enabled: boolean; available: boolean; month: strin
 export interface MonthSummary {
   month: string; model: string; resumo: string; destaques: string[]; sugestoes: string[]; facts: { label: string; value: string }[];
 }
-export interface AppSettings { own_transfer_names: string[]; ai: AiSettings }
+export interface AppSettings { own_transfer_names: string[]; monthly_limit_cents: number | null; ai: AiSettings }
 
 export interface ApplyResult {
   dry_run: boolean; total_uncategorized: number; matched: number; updated: number;

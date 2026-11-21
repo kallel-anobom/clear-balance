@@ -114,6 +114,7 @@ function InvoiceCard({ inv, card, onPay, onTotal }: { inv: Invoice; card?: Card;
         <div>
           <strong>Vence em {dateBR(inv.due_date)}</strong> <Badge tone={st.tone}>{st.label}</Badge>
           {inv.amount_estimated && <Badge tone="warn" title="Total da fatura ainda não confirmado">estimada</Badge>}
+          {inv.partial_total_cents != null && inv.statement_total_cents === null && <Badge tone="info" title="Valor parcial informado por você">parcial {brl(inv.partial_total_cents)} em {dateBR(inv.partial_on)}</Badge>}
           <div className="dates">
             <span>Fechamento: {dateBR(inv.closing_date)}</span>
             <span>Vencimento: {dateBR(inv.due_date)}</span>
@@ -151,6 +152,106 @@ function InvoiceCard({ inv, card, onPay, onTotal }: { inv: Invoice; card?: Card;
         </div>
       ))}
     </li>
+  );
+}
+
+/** Dias entre uma data AAAA-MM-DD e hoje (0 = hoje). */
+function daysSince(iso: string): number {
+  return Math.round((new Date(`${todayISO()}T00:00:00`).getTime() - new Date(`${iso}T00:00:00`).getTime()) / 86_400_000);
+}
+
+/** Valor parcial da fatura aberta: o total que o app do banco mostra hoje, para cartões que ainda não dão para importar. */
+function PartialModal({ card, inv, onClose }: { card: Card; inv?: Invoice; onClose: () => void }) {
+  const refresh = useRefresh();
+  const [v, setV] = useState<number | null>(inv?.partial_total_cents ?? null);
+  const save = useMutation({
+    mutationFn: (value: number | null) => api.put('/invoices/partial', { card_id: card.id, invoice_id: inv?.id, partial_cents: value }),
+    onSuccess: () => { refresh(); onClose(); },
+  });
+  return (
+    <Modal title={`Valor parcial — ${card.name}`} onClose={onClose}>
+      <form className="form-grid" onSubmit={(e) => { e.preventDefault(); if (v !== null) save.mutate(v); }}>
+        <p className="span2 muted">
+          Informe o <strong>total da fatura aberta</strong> que o app do banco mostra hoje (com parcelas e tudo). Não precisa lançar compra por compra.
+          A previsão usa o maior entre este valor e as compras lançadas. Não é o total confirmado: quando a fatura fechar, importe-a e confirme o total
+          (aí este valor sai de cena sozinho). Atualize sempre que o valor mudar; ele fica marcado como desatualizado depois de 3 dias.
+        </p>
+        <MoneyField label="Total da fatura hoje" value={v} onChange={setV} required className="span2"
+          hint={inv ? `Fatura que vence em ${dateBR(inv.due_date)}. Compras já lançadas nela: ${brl(inv.lines_total_cents)}.` : 'Vai para a fatura aberta do cartão (criada se ainda não existir).'} />
+        <div className="span2"><ErrorBox error={save.error} /></div>
+        <div className="form-actions span2">
+          {inv?.partial_total_cents != null && <button type="button" className="btn" disabled={save.isPending} onClick={() => save.mutate(null)}>Remover valor parcial</button>}
+          <button type="button" className="btn" onClick={onClose}>Cancelar</button>
+          <button className="btn primary" disabled={save.isPending || v === null}>Salvar</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+/** Uma linha por cartão com a fatura aberta e o frescor do valor, para manter a previsão do mês em dia. */
+function OpenInvoicesPanel({ cards, invoices, onPartial }: { cards: Card[]; invoices: Invoice[]; onPartial: (card: Card, inv?: Invoice) => void }) {
+  if (!cards.length) return null;
+  return (
+    <Panel title="Faturas abertas — manter atualizadas">
+      <p className="muted small">
+        A previsão do mês depende do valor das faturas abertas. Cartão que dá para importar (CSV/XLSX): reimporte a fatura aberta. Cartão que só libera a fatura depois do fechamento
+        (ex.: Santander, Mercado Livre): informe o <strong>valor parcial</strong> que o app do banco mostra hoje. Se você importou as compras, o sistema usa o maior valor entre elas e o parcial.
+      </p>
+      <ul className="rows">
+        {cards.map((c) => {
+          const open = invoices.filter((i) => i.card_id === c.id && i.status === 'open' && i.statement_total_cents === null).sort((a, b) => a.due_date.localeCompare(b.due_date))[0];
+          const age = open?.partial_on ? daysSince(open.partial_on) : null;
+          return (
+            <li className="row" key={c.id} style={{ flexWrap: 'wrap' }}>
+              <div className="row-main" style={{ minWidth: 220 }}>
+                <strong>{c.name}</strong>
+                <div className="row-sub">
+                  {open ? <span>vence {dateBR(open.due_date)} · {open.lines_count} compra(s) lançada(s)</span> : <span>sem fatura aberta ainda</span>}
+                  {open?.partial_total_cents != null && (
+                    <Badge tone={age !== null && age > 3 ? 'warn' : 'info'}>
+                      parcial de {brl(open.partial_total_cents)} {age === 0 ? 'informado hoje' : `há ${age} dia(s)`}{age !== null && age > 3 ? ' — atualize' : ''}
+                    </Badge>
+                  )}
+                </div>
+              </div>
+              <div className="row-amount" style={{ flex: '0 1 auto' }}>
+                {open && <strong>≈ {brl(open.amount_cents)}</strong>}
+                <button className="btn small" onClick={() => onPartial(c, open)}>{open?.partial_total_cents != null ? 'Atualizar valor parcial' : 'Informar valor parcial'}</button>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </Panel>
+  );
+}
+
+/** Baixa a conferência do mês em JSON (para guardar ou colar numa conversa de análise). */
+function DownloadReport({ month }: { month: string }) {
+  const [withLines, setWithLines] = useState(false);
+  const dl = useMutation({
+    mutationFn: async () => {
+      const data = await api.get<unknown>(`/overview/report?month=${month}${withLines ? '&lines=1' : ''}`);
+      const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `conferencia-${month}${withLines ? '-com-lancamentos' : ''}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    },
+  });
+  return (
+    <div className="tx-actions" style={{ alignItems: 'center' }}>
+      <label className="small muted" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+        <input type="checkbox" checked={withLines} onChange={(e) => setWithLines(e.target.checked)} />
+        incluir lançamentos (descrições e valores)
+      </label>
+      <button className="btn" disabled={dl.isPending} onClick={() => dl.mutate()} title="Números do mês, previsão e faturas. Sem chaves nem senhas; descrições só se marcar a opção.">
+        {dl.isPending ? 'Gerando…' : 'Baixar conferência'}
+      </button>
+      <ErrorBox error={dl.error} />
+    </div>
   );
 }
 
@@ -252,13 +353,13 @@ function UnlinkedPaymentsPanel({ payments, options, busy, error, onLink, onLinkA
 }
 
 export default function CardsPage({ month }: { month: string }) {
-  void month;
   const { cards, accounts } = useLookups();
   const refresh = useRefresh();
   const [cardForm, setCardForm] = useState<{ card?: Card } | null>(null);
   const [paying, setPaying] = useState<Invoice | null>(null);
   const [totalFor, setTotalFor] = useState<Invoice | null>(null);
   const [newFor, setNewFor] = useState<Card | null>(null);
+  const [partialFor, setPartialFor] = useState<{ card: Card; inv?: Invoice } | null>(null);
   const [selected, setSelected] = useState<number | 'all'>('all');
   const q = useQuery({ queryKey: ['invoices', selected], queryFn: () => api.get<InvoicesResponse>(`/invoices${selected === 'all' ? '' : `?card_id=${selected}`}`) });
   const link = useMutation({ mutationFn: ({ id, invoice_id }: { id: number; invoice_id: number }) => api.patch(`/transactions/${id}`, { invoice_id }), onSuccess: refresh });
@@ -279,6 +380,7 @@ export default function CardsPage({ month }: { month: string }) {
         <h1>Cartões e faturas</h1>
         <button className="btn primary" onClick={() => setCardForm({})}>+ Novo cartão</button>
       </div>
+      <DownloadReport month={month} />
 
       <div className="alert info">
         <strong>Como contamos:</strong> cada <em>compra</em> é um gasto, na <strong>data da compra</strong>. O <em>pagamento da fatura</em> é só saída de caixa, na <strong>data do pagamento</strong> — nunca é somado como despesa. Assim o mesmo gasto não é contado duas vezes.
@@ -314,6 +416,8 @@ export default function CardsPage({ month }: { month: string }) {
         />
       )}
 
+      <OpenInvoicesPanel cards={selected === 'all' ? cards : cards.filter((c) => c.id === selected)} invoices={invoices} onPartial={(card, inv) => setPartialFor({ card, inv })} />
+
       <InstallmentsPanel cardId={selected} />
 
       {q.isLoading ? <Loading /> : invoices.length === 0 ? (cards.length > 0 && <Empty>Nenhuma fatura ainda. Elas são criadas ao lançar compras no cartão ou importar uma fatura.</Empty>) : (<>
@@ -325,6 +429,7 @@ export default function CardsPage({ month }: { month: string }) {
       {paying && <PayModal inv={paying} defaultAccount={cards.find((c) => c.id === paying.card_id)?.default_account_id ?? null} onClose={() => setPaying(null)} />}
       {totalFor && <InvoiceTotalModal inv={totalFor} onClose={() => setTotalFor(null)} />}
       {newFor && <NewInvoiceModal card={newFor} onClose={() => setNewFor(null)} />}
+      {partialFor && <PartialModal card={partialFor.card} inv={partialFor.inv} onClose={() => setPartialFor(null)} />}
     </div>
   );
 }

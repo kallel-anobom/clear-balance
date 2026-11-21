@@ -22,7 +22,7 @@ export async function loadOutlook(from: string, months: number, today: string = 
 
   const [due, closed, cards, overviews] = await Promise.all([
     pool.query(
-      `select i.id as invoice_id, i.card_id, c.name as card_name, i.due_date, i.closing_date, i.statement_total_cents, i.paid_on, ${agg('$3')}
+      `select i.id as invoice_id, i.card_id, c.name as card_name, i.due_date, i.closing_date, i.statement_total_cents, i.partial_total_cents, i.partial_on, i.paid_on, ${agg('$3')}
        from invoices i join cards c on c.id = i.card_id
        left join transactions t on t.invoice_id = i.id and t.type = 'expense'
        where i.due_date between $1 and $2

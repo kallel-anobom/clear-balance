@@ -7,7 +7,7 @@ import { buildOverview } from './overviewData.js';
 /** Busca os dados de um mês e roda a conferência dos números (ver `checks.ts`). */
 export async function loadChecks(month: string, today: string = todayISO()): Promise<ChecksResult> {
   const { start, end } = monthBounds(month);
-  const [outlook, overview, invoices, dups, uncat] = await Promise.all([
+  const [outlook, overview, invoices, dups, uncat, limit] = await Promise.all([
     loadOutlook(month, 1, today),
     buildOverview(month, today),
     pool.query(
@@ -33,6 +33,7 @@ export async function loadChecks(month: string, today: string = todayISO()): Pro
        from transactions where type = 'expense' and month_ref = $1 and category_id is null`,
       [month],
     ),
+    pool.query(`select value from settings where key = 'monthly_limit_cents'`),
   ]);
 
   return computeChecks({
@@ -45,5 +46,6 @@ export async function loadChecks(month: string, today: string = todayISO()): Pro
     scheduled_income_cents: overview.income.scheduled_net_cents,
     uncategorized: uncat.rows[0],
     duplicates: dups.rows as DuplicateGroup[],
+    limit_cents: typeof limit.rows[0]?.value === 'number' ? limit.rows[0].value : null,
   });
 }

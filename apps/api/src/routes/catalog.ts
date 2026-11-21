@@ -98,18 +98,28 @@ export async function catalogRoutes(app: FastifyInstance) {
   app.get('/settings', async () => {
     const { rows } = await pool.query('select key, value from settings');
     const s = Object.fromEntries(rows.map((r) => [r.key, r.value]));
-    return { own_transfer_names: s.own_transfer_names ?? [], ai: await getAiState(pool) };
+    return { own_transfer_names: s.own_transfer_names ?? [], monthly_limit_cents: s.monthly_limit_cents ?? null, ai: await getAiState(pool) };
   });
   app.put('/settings', async (req) => {
     const b = z.object({
       own_transfer_names: z.array(z.string().trim().min(2).max(80)).max(20).optional(),
       ai_enabled: z.boolean().optional(),
+      // Limite de saída do mês (ex.: o salário líquido). null remove. Só alimenta o alerta da Conferência.
+      monthly_limit_cents: z.number().int().positive().max(10_000_000_000).nullable().optional(),
     }).parse(req.body);
     if (b.own_transfer_names) {
       await pool.query(
         `insert into settings (key, value) values ('own_transfer_names', $1)
          on conflict (key) do update set value = excluded.value`,
         [JSON.stringify(b.own_transfer_names)],
+      );
+    }
+    if (b.monthly_limit_cents === null) await pool.query(`delete from settings where key = 'monthly_limit_cents'`);
+    else if (b.monthly_limit_cents !== undefined) {
+      await pool.query(
+        `insert into settings (key, value) values ('monthly_limit_cents', $1)
+         on conflict (key) do update set value = excluded.value`,
+        [JSON.stringify(b.monthly_limit_cents)],
       );
     }
     if (b.ai_enabled !== undefined) await setAiEnabled(pool, b.ai_enabled);

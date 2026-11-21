@@ -683,6 +683,67 @@ describe.skipIf(!available)('API + PostgreSQL', () => {
       expect(after.unlinked_payments.find((x: Row) => x.id === p.body.id)).toBeUndefined();
       expect(after.invoices.find((i: Row) => i.id === inv.id)).toMatchObject({ status: 'paid' });
     });
+
+    it('valor parcial da fatura aberta: cria a fatura, entra na previsão, é validado e o total confirmado o substitui', async () => {
+      const { todayISO } = await import('../src/lib.js');
+      const card = (await json('POST', '/cards', { name: 'Cartão Parcial', closing_day: 28, due_day: 5 })).body;
+      const put = (partial_cents: number | null, extra: Row = {}) => json('PUT', '/invoices/partial', { card_id: card.id, partial_cents, ...extra });
+      const list = async () => (await json('GET', `/invoices?card_id=${card.id}`)).body.invoices as Row[];
+
+      expect((await put(-1)).status).toBe(400);
+      const first = await put(250000);
+      expect(first.status).toBe(200);
+      expect(first.body.partial_on).toBe(todayISO());
+      let invoices = await list();
+      expect(invoices).toHaveLength(1);
+      expect(invoices[0]).toMatchObject({ id: first.body.id, partial_total_cents: 250000, amount_cents: 250000, amount_estimated: true, lines_count: 0 });
+
+      // Entra no que já está lançado da previsão do mês de vencimento, sem aviso de fatura desatualizada.
+      const dueMonth = invoices[0].due_date.slice(0, 7);
+      const ofCard = async () => ((await json('GET', `/overview/outlook?from=${dueMonth}&months=1`)).body.months[0].invoices as Row[]).find((i) => i.card_name === 'Cartão Parcial')!;
+      expect(await ofCard()).toMatchObject({ committed_cents: 250000, estimated_cents: 250000, is_stale: false });
+
+      // Atualizar reaproveita a mesma fatura; remover e informar de novo também.
+      expect((await put(300000)).body.id).toBe(first.body.id);
+      expect((await put(null)).body.partial_total_cents).toBeNull();
+      expect((await list())[0]).toMatchObject({ partial_total_cents: null, amount_cents: 0 });
+      expect((await put(300000)).status).toBe(200);
+      // Outro cartão não pode mexer na fatura deste.
+      expect((await put(1000, { invoice_id: first.body.id, card_id: card.id + 999 })).status).toBe(404);
+
+      // Compra lançada menor que o parcial: vale o parcial. Relatório sem descrições por padrão; com `lines=1` passa por redact.
+      const purchase = await json('POST', '/transactions', { type: 'expense', description: 'COMPRA joao@exemplo.com', card_id: card.id, occurred_on: todayISO(), total_cents: 1000 });
+      expect(purchase.status).toBe(201);
+      expect((await list())[0]).toMatchObject({ id: first.body.id, amount_cents: 300000, lines_count: 1 });
+      const plain = (await json('GET', `/overview/report?month=${dueMonth}`)).body;
+      const row = (plain.invoices as Row[]).find((i) => i.card === 'Cartão Parcial')!;
+      expect(row).toMatchObject({ partial_total_cents: 300000, amount_cents: 300000, lines_count: 1 });
+      expect(row.lines).toBeUndefined();
+      expect(JSON.stringify(plain)).not.toContain('joao@exemplo.com');
+      const full = (await json('GET', `/overview/report?month=${dueMonth}&lines=1`)).body;
+      const lines = (full.invoices as Row[]).find((i) => i.card === 'Cartão Parcial')!.lines as Row[];
+      expect(lines).toHaveLength(1);
+      expect(lines[0].description).toBe('COMPRA [EMAIL]');
+      expect((await json('GET', '/overview/report?month=xx')).status).toBe(400);
+
+      // Total confirmado substitui o parcial, e a partir daí o parcial é recusado.
+      expect((await json('PATCH', `/invoices/${first.body.id}`, { statement_total_cents: 280000 })).status).toBe(200);
+      expect((await list())[0]).toMatchObject({ partial_total_cents: null, partial_on: null, amount_cents: 280000, amount_estimated: false });
+      expect((await put(300000)).status).toBe(400);
+
+      // Alerta de limite mensal: vermelho quando o já lançado passa, some ao remover o limite.
+      expect((await json('PUT', '/settings', { monthly_limit_cents: 0 })).status).toBe(400);
+      expect((await json('PUT', '/settings', { monthly_limit_cents: 100000 })).status).toBe(200);
+      expect((await json('GET', '/settings')).body.monthly_limit_cents).toBe(100000);
+      const over = ((await json('GET', `/overview/checks?month=${dueMonth}`)).body.checks as Row[]).find((c) => c.code === 'over_limit');
+      expect(over).toMatchObject({ level: 'bad' });
+      expect((await json('PUT', '/settings', { monthly_limit_cents: null })).status).toBe(200);
+      expect((await json('GET', '/settings')).body.monthly_limit_cents).toBeNull();
+      expect(((await json('GET', `/overview/checks?month=${dueMonth}`)).body.checks as Row[]).some((c) => c.code === 'over_limit')).toBe(false);
+
+      await json('DELETE', `/transactions/${purchase.body.id}`);
+      expect((await json('DELETE', `/cards/${card.id}`)).status).toBe(204);
+    });
   });
 
   describe('orçamento, comparação e assinaturas', () => {
