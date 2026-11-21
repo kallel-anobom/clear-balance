@@ -124,7 +124,7 @@ export default function ImportPage({ month }: { month: string }) {
           setProgress(null);
         }
       }
-      if (files.length > 1) throw new Error('Para CSV, envie um arquivo por vez.');
+      if (files.length > 1) throw new Error('Para CSV ou planilha, envie um arquivo por vez.');
       const form = new FormData();
       form.set('target_type', tType);
       form.set('target_id', tIdStr);
@@ -223,9 +223,9 @@ export default function ImportPage({ month }: { month: string }) {
                   {cards.length > 0 && <optgroup label="Fatura de cartão">{cards.map((c) => <option key={c.id} value={`card:${c.id}`}>{c.name}{c.last4 ? ` •••• ${c.last4}` : ''}</option>)}</optgroup>}
                 </select>
               </Field>
-              <Field label="Arquivo (CSV, PDF ou imagem do extrato)" className="span2"
+              <Field label="Arquivo (CSV, planilha XLSX, PDF ou imagem do extrato)" className="span2"
                 hint="Imagens (PNG, JPG, WebP) e PDFs escaneados são lidos por OCR aqui no seu navegador, sem enviar a imagem a ninguém. Pode escolher várias imagens do mesmo extrato.">
-                <input ref={fileRef} type="file" multiple accept=".csv,.txt,.pdf,.png,.jpg,.jpeg,.webp,text/csv,application/pdf,image/png,image/jpeg,image/webp"
+                <input ref={fileRef} type="file" multiple accept=".csv,.xlsx,.txt,.pdf,.png,.jpg,.jpeg,.webp,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/pdf,image/png,image/jpeg,image/webp"
                   onChange={(e) => setFiles(Array.from(e.target.files ?? []))} required />
               </Field>
               {isPdf && (
