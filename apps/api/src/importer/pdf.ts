@@ -72,7 +72,7 @@ const MONEY_TOKEN = /[-+]?(?:R\$\s?)?[-+]?\(?\d{1,3}(?:\.\d{3})*,\d{2}\)?-?(?:\s
 // "Total a pagar" e afins são o total desta fatura; "Total da fatura" genérico pode ser o da fatura anterior
 // (ex.: "Total da fatura de setembro" no resumo), por isso só vale se nenhum total forte aparecer.
 const STRONG_TOTAL_RE = /(total a pagar|valor total( da fatura)?|total desta fatura)/i;
-const WEAK_TOTAL_RE = /total (da )?fatura/i;
+const WEAK_TOTAL_RE = /total (da )?fatura|^subtotal\b/i;
 const PREVIOUS_TOTAL_RE = /anterior|fatura de (jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)/i;
 /** Pagamento da fatura anterior dentro da própria fatura: não faz parte do total a pagar. */
 export function isStatementPaymentLine(description: string): boolean {
@@ -86,6 +86,21 @@ const LONE_MONEY_RE = /^[-+]?(?:R\$\s?)?[-+]?\d{1,3}(?:\.\d{3})*,\d{2}$/;
 const PAGE_NOISE_RE = /^--\s*\d+\s+of\s+\d+\s*--$|^data\s+lan[cç]/i;
 const ENDS_WITH_MONEY_RE = /(?:^|\s)[-+]?(?:R\$\s?)?[-+]?\d{1,3}(?:\.\d{3})*,\d{2}$/;
 const DUE_RE = /vencimento\D{0,25}(\d{2}\/\d{2}\/\d{4})/i;
+// Valor com ponto decimal e vírgula de milhar ("-6,436.50"): o app do Itaú exporta assim a fatura aberta.
+const US_MONEY_RE = /(?<![\d.,])(-?)(\d{1,3}(?:,\d{3})+|\d+)\.(\d{2})(?![\d.,])/g;
+const BR_MONEY_COUNT_RE = /\d,\d{2}(?!\d)/g;
+
+/**
+ * Se o documento só usa o formato americano de valores, converte para o brasileiro antes de ler.
+ * Só age quando há vários valores assim e nenhum (ou muito poucos) no formato brasileiro, para não
+ * mexer em PDFs normais.
+ */
+export function normalizeUsDecimals(text: string): string {
+  const us = (text.match(US_MONEY_RE) ?? []).length;
+  const br = (text.match(BR_MONEY_COUNT_RE) ?? []).length;
+  if (us < 3 || br * 3 > us) return text;
+  return text.replace(US_MONEY_RE, (_m, sign: string, int: string, cents: string) => `${sign}${int.replace(/,/g, '.')},${cents}`);
+}
 
 /**
  * Interpreta o texto extraído de um PDF de extrato/fatura.
@@ -98,8 +113,7 @@ export function parseStatementText(
 ): PdfParseResult {
   const [refYear, refMon] = opts.refMonth.split('-').map(Number);
   // PDFs de banco usam o sinal de menos tipográfico (U+2212) e travessões: sem trocar por "-", crédito viraria compra.
-  const lines = (opts.ocr ? cleanOcrText(text) : text)
-    .replace(/[\u2212\u2012\u2013]/g, '-')
+  const lines = normalizeUsDecimals((opts.ocr ? cleanOcrText(text) : text).replace(/[\u2212\u2012\u2013]/g, '-'))
     .split(/\r?\n/)
     .map((l) => l.replace(/\s+/g, ' ').trim())
     .filter(Boolean);
@@ -117,6 +131,11 @@ export function parseStatementText(
     if (detectedDue === null) {
       const d = line.match(DUE_RE);
       if (d) detectedDue = parseDate(d[1]);
+      else if (/vencimento\s*$/i.test(line)) {
+        // Tabela "Cartão | Valor (parcial) | Vencimento": a data vem no fim da linha seguinte.
+        const next = lines[lineNo + 1]?.match(/(\d{2}\/\d{2}\/\d{4})$/);
+        if (next) detectedDue = parseDate(next[1]);
+      }
     }
     if (STRONG_TOTAL_RE.test(line)) {
       // O valor pode estar na mesma linha ou na seguinte (layout "Total a pagar" / "R$ 978,05").
@@ -147,6 +166,18 @@ export function parseStatementText(
         if (DATE_AT_START.test(next)) break;
         if (LONE_MONEY_RE.test(next)) { restWithValue = `${rest} ${next}`; break; }
       }
+      // Descrição quebrada em duas linhas, com o valor no fim da segunda ("Iof Internacional - Loja" / "Cidade R$ 4,10").
+      const next = lines[lineNo + 1];
+      if (
+        restWithValue === rest &&
+        next &&
+        !DATE_AT_START.test(next) &&
+        !PAGE_NOISE_RE.test(next) &&
+        MONEY_TOKEN_TEST.test(next) &&
+        !/cota[cç][aã]o|usd|eur\b|d[oó]lar/i.test(next)
+      ) {
+        restWithValue = `${rest} ${next}`;
+      }
     }
     // Extrato em que a descrição quebra em várias linhas e o valor vem na última ("PIX ENVIADO ..." / "NOME" / "-240,00").
     if (opts.kind !== 'card' && !MONEY_TOKEN_TEST.test(rest)) {
@@ -157,6 +188,8 @@ export function parseStatementText(
         parts.push(next);
       }
     }
+    // "R$ 112,75 USD 18,95": o valor na moeda original vem depois do valor em reais e não é um segundo valor.
+    restWithValue = restWithValue.replace(/\b(?:USD|EUR|GBP|US\$)\s*-?\d{1,3}(?:\.\d{3})*,\d{2}\b/g, ' ');
     const tokens = [...restWithValue.matchAll(MONEY_TOKEN)];
     if (!tokens.length) continue;
 
