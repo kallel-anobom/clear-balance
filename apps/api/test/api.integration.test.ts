@@ -168,6 +168,17 @@ describe.skipIf(!available)('API + PostgreSQL', () => {
       expect((await json('GET', `/invoices/${invoiceId}`)).body.paid_on).toBeNull();
     });
 
+    it('corrigir fechamento e vencimento da fatura; vencimento repetido no mesmo cartão dá erro claro', async () => {
+      const other = await json('POST', '/invoices', { card_id: cardId, due_date: '2031-03-10' });
+      expect(other.status).toBe(201);
+      const clash = await json('PATCH', `/invoices/${other.body.id}`, { due_date: '2026-12-05' });
+      expect(clash.status).toBe(409);
+      const ok = await json('PATCH', `/invoices/${other.body.id}`, { due_date: '2031-03-02', closing_date: '2031-02-26' });
+      expect(ok.status).toBe(200);
+      expect((await json('GET', `/invoices/${other.body.id}`)).body).toMatchObject({ due_date: '2031-03-02', closing_date: '2031-02-26' });
+      expect((await json('DELETE', `/invoices/${other.body.id}`)).status).toBe(204);
+    });
+
     it('extrato: PIX para "Fulano de Tal" é transferência, juros são despesa, aluguel previsto é vinculado', async () => {
       await json('POST', '/months/2026-11/ensure');
       const csv = [

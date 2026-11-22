@@ -146,6 +146,14 @@ export async function invoiceRoutes(app: FastifyInstance) {
         due_date: date.optional(),
       })
       .parse(req.body);
+    // Vencimento é único por cartão: avisa em português em vez de estourar a restrição do banco.
+    if (b.due_date) {
+      const { rows: clash } = await pool.query(
+        `select 1 from invoices where id <> $1 and due_date = $2 and card_id = (select card_id from invoices where id = $1)`,
+        [req.params.id, b.due_date],
+      );
+      if (clash[0]) throw new HttpError(409, 'Já existe outra fatura deste cartão com esse vencimento. Mova os pagamentos para ela e apague a duplicada antes.');
+    }
     const { rows } = await pool.query(
       `update invoices set
          statement_total_cents = case when $2::boolean then $3 else statement_total_cents end,

@@ -38,7 +38,7 @@ const SKIP_ROW = /^(saldo|sdo|total)\b|saldo (do dia|anterior|final|parcial|disp
 const TIME_ONLY = /^\d{1,2}[:h]\d{2}(\s?h)?$/;
 const SUBLABEL = /^(compra (no )?(debito|credito)|debito|credito|aprovad[ao]|finalizad[ao]|concluid[ao]|processando|em processamento)$/;
 
-const IN_HINT = /\b(recebid[oa]|recebimento|reembolso|estorno|deposito|salario|rendimento)\b/;
+export const IN_HINT = /\b(recebid[oa]|recebimento|reembolso|estorno|deposito|salario|rendimento)\b/;
 const OUT_HINT = /\b(enviad[oa]|pagamento|compra|debito|saque|tarifa|boleto)\b/;
 
 function normLine(line: string): string {
