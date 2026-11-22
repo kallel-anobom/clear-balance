@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseCsv } from '../src/importer/csv.js';
-import { parseStatementText } from '../src/importer/pdf.js';
+import { normalizeUsDecimals, parseStatementText } from '../src/importer/pdf.js';
 import { fingerprint, suggest } from '../src/importer/classify.js';
 
 const buf = (s: string) => Buffer.from(s, 'utf8');
@@ -155,6 +155,45 @@ Total da fatura 200,00
     expect(r.rows[0].uncertain_reason).toBeNull(); // "RECEBIDO" confirma a entrada
     expect(r.rows[3].uncertain_reason).toMatch(/sem sinal/); // entrada sem confirmação no texto: pede conferência
     expect(r.rows[1].description).toBe('PIX ENVIADO BELTRANO DE TESTE');
+  });
+
+  it('fatura aberta com ponto decimal, parcelamento em coluna, moeda estrangeira e descrição quebrada', () => {
+    const text = [
+      'Fatura Aberta - Dezembro/2026',
+      'Data \tLançamento \tParcelamento \tValor \tTitularidade',
+      '09/11/2026 \tPagamento Debito Automatico \tR$ \t-1,000.00 \tTitular',
+      '18/11/2026 \tLoja Exemplo \tParcela 1 de 3 \tR$ \t202.78 \tTitular',
+      '17/11/2026 \tMercado Teste \tR$ \t90.50 \tTitular',
+      '16/11/2026 \tServico Exterior \tR$ \t112.75 \tUSD 18,95',
+      '16/11/2026 \tIof Internacional - Servico Exterior \tR$ \t3.95 \tTitular',
+      '15/11/2026 \tIof Internacional - Outro Servico',
+      '\tExterior \tR$ \t4.10 \tTitular',
+      '14/11/2026 \tEstorno Mensalidade \tR$ \t-33.25 \tTitular',
+      'Subtotal \tR$ \t380.83',
+      'Cartão \tValor (parcial) \tVencimento',
+      'Azul Visa - final 0000 \tR$ \t380.83 \t09/12/2026',
+    ].join('\n');
+    const r = parseStatementText(text, { kind: 'card', refMonth: '2026-12' });
+    expect(r.rows.map((x) => [x.abs_cents, x.direction])).toEqual([
+      [100000, 'in'],
+      [20278, 'out'],
+      [9050, 'out'],
+      [11275, 'out'],
+      [395, 'out'],
+      [410, 'out'],
+      [3325, 'in'],
+    ]);
+    expect(r.rows[5].description).toBe('Iof Internacional - Outro Servico Exterior');
+    expect(r.rows.every((x) => x.uncertain_reason === null)).toBe(true);
+    expect(r.detected_total_cents).toBe(38083);
+    expect(r.detected_due_date).toBe('2026-12-09');
+    expect(r.reconciliation_cents).toBe(0); // o pagamento do débito automático fica fora da soma
+    expect(r.confidence).toBe('ok');
+  });
+
+  it('não converte valores quando o PDF já usa vírgula decimal', () => {
+    const text = '10/11/2026 LOJA 1.234,56\n11/11/2026 OUTRA 7,50\n12/11/2026 MAIS 3.10\n13/11/2026 X 4.20\n14/11/2026 Y 5.30';
+    expect(normalizeUsDecimals(text)).toBe(text);
   });
 
   it('não inventa nada quando não reconhece lançamentos', () => {
