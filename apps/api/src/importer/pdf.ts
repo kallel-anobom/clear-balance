@@ -1,5 +1,5 @@
 import { normalizeText, parseDate, parseMoney, todayISO } from '../lib.js';
-import { parseLayoutLines } from './layout.js';
+import { IN_HINT, parseLayoutLines } from './layout.js';
 import type { ParsedRow, TargetKind } from './types.js';
 
 export class PdfError extends Error {
@@ -60,12 +60,14 @@ export function cleanOcrText(text: string): string {
 }
 
 const MONTHS = 'jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez';
+// "3 06/08 LOJA ..." (Santander): o dígito antes da data é a coluna "Compra", não faz parte do lançamento.
 const DATE_AT_START = new RegExp(
-  `^(\\d{2}/\\d{2}(?:/\\d{2,4})?|\\d{2}\\s+(?:${MONTHS})\\.?(?:\\s+\\d{4})?)\\s+(.+)$`,
+  `^(?:\\d\\s(?=\\d{2}/\\d{2}\\s))?(\\d{2}/\\d{2}(?:/\\d{2,4})?|\\d{2}\\s+(?:${MONTHS})\\.?(?:\\s+\\d{4})?)\\s+(.+)$`,
   'i',
 );
 // Valor no formato brasileiro com vírgula decimal obrigatória (evita confundir com números de documento).
-const MONEY_TOKEN = /(?:R\$\s?)?[-+]?\(?\d{1,3}(?:\.\d{3})*,\d{2}\)?-?(?:\s?[CD])?(?=\s|$)/g;
+// Aceita o sinal antes ou depois do "R$" ("-R$ 4,54" e "R$ -4,54").
+const MONEY_TOKEN = /[-+]?(?:R\$\s?)?[-+]?\(?\d{1,3}(?:\.\d{3})*,\d{2}\)?-?(?:\s?[CD])?(?=\s|$)/g;
 
 // "Total a pagar" e afins são o total desta fatura; "Total da fatura" genérico pode ser o da fatura anterior
 // (ex.: "Total da fatura de setembro" no resumo), por isso só vale se nenhum total forte aparecer.
@@ -74,10 +76,15 @@ const WEAK_TOTAL_RE = /total (da )?fatura/i;
 const PREVIOUS_TOTAL_RE = /anterior|fatura de (jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)/i;
 /** Pagamento da fatura anterior dentro da própria fatura: não faz parte do total a pagar. */
 export function isStatementPaymentLine(description: string): boolean {
-  return /pagamento (recebido|efetuado|d[ae] fatura|fatura|on.?line)|pgto (fatura|recebido)|credito de pagamento|obrigado pelo pagamento|debito autom/.test(
+  return /pagamento (recebido|efetuado|em \d{1,2}|d[ae] fatura|fatura|on.?line)|pgto (fatura|recebido)|credito de pagamento|obrigado pelo pagamento|debito autom/.test(
     normalizeText(description),
   );
 }
+const MONEY_TOKEN_TEST = new RegExp(MONEY_TOKEN.source);
+const LONE_MONEY_RE = /^[-+]?(?:R\$\s?)?[-+]?\d{1,3}(?:\.\d{3})*,\d{2}$/;
+// Rodapé/cabeçalho de página que não faz parte da descrição ("-- 1 of 6 --", "Data Lançamentos ...").
+const PAGE_NOISE_RE = /^--\s*\d+\s+of\s+\d+\s*--$|^data\s+lan[cç]/i;
+const ENDS_WITH_MONEY_RE = /(?:^|\s)[-+]?(?:R\$\s?)?[-+]?\d{1,3}(?:\.\d{3})*,\d{2}$/;
 const DUE_RE = /vencimento\D{0,25}(\d{2}\/\d{2}\/\d{4})/i;
 
 /**
@@ -90,23 +97,36 @@ export function parseStatementText(
   opts: { kind: TargetKind; refMonth: string; ocr?: boolean; today?: string },
 ): PdfParseResult {
   const [refYear, refMon] = opts.refMonth.split('-').map(Number);
-  const lines = (opts.ocr ? cleanOcrText(text) : text).split(/\r?\n/).map((l) => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  // PDFs de banco usam o sinal de menos tipográfico (U+2212) e travessões: sem trocar por "-", crédito viraria compra.
+  const lines = (opts.ocr ? cleanOcrText(text) : text)
+    .replace(/[\u2212\u2012\u2013]/g, '-')
+    .split(/\r?\n/)
+    .map((l) => l.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
   let rows: ParsedRow[] = [];
   let candidates = 0;
   let detectedTotal: number | null = null;
+  const strongTotals: number[] = [];
   let weakTotal: number | null = null;
   let detectedDue: string | null = null;
   let yearless = false;
+  // Se o documento usa "-" nas saídas (vários valores negativos), o valor sem sinal é entrada.
+  const marksOutflows = opts.kind !== 'card' && lines.filter((l) => /(?:^|\s)-\s?(?:R\$\s?)?\d{1,3}(?:\.\d{3})*,\d{2}$/.test(l)).length >= 3;
 
   for (const [lineNo, line] of lines.entries()) {
     if (detectedDue === null) {
       const d = line.match(DUE_RE);
       if (d) detectedDue = parseDate(d[1]);
     }
-    if (detectedTotal === null && STRONG_TOTAL_RE.test(line)) {
+    if (STRONG_TOTAL_RE.test(line)) {
       // O valor pode estar na mesma linha ou na seguinte (layout "Total a pagar" / "R$ 978,05").
       const tokens = line.match(MONEY_TOKEN) ?? (/^(?:R\$\s?)?[\d.]+,\d{2}$/.test(lines[lineNo + 1] ?? '') ? lines[lineNo + 1].match(MONEY_TOKEN) : null);
-      if (tokens) detectedTotal = parseMoney(tokens[tokens.length - 1]);
+      const value = tokens ? parseMoney(tokens[tokens.length - 1]) : null;
+      if (value !== null) {
+        // Há faturas com mais de um "Total a pagar" (ex.: simulação de parcelamento); o certo é decidido pela soma das linhas.
+        strongTotals.push(value);
+        detectedTotal ??= value;
+      }
     } else if (weakTotal === null && WEAK_TOTAL_RE.test(line) && !PREVIOUS_TOTAL_RE.test(line)) {
       const tokens = line.match(MONEY_TOKEN);
       if (tokens) weakTotal = parseMoney(tokens[tokens.length - 1]);
@@ -117,12 +137,32 @@ export function parseStatementText(
     const rest = m[2];
     // Linhas de saldo/total não são lançamentos.
     if (/^(saldo|sdo|total)\b|saldo (do dia|anterior|final|parcial|disponivel|disponível)/i.test(rest)) continue;
+    // "13/11/2026 11.033,70": saldo do dia, só tem valor — não é lançamento nem candidato.
+    if (LONE_MONEY_RE.test(rest)) continue;
     candidates++;
-    const tokens = [...rest.matchAll(MONEY_TOKEN)];
+    let restWithValue = rest;
+    // Compra em moeda estrangeira: o valor em reais vem numa linha só dele, logo abaixo (depois da cotação).
+    if (opts.kind === 'card' && !MONEY_TOKEN_TEST.test(rest)) {
+      for (const next of lines.slice(lineNo + 1, lineNo + 4)) {
+        if (DATE_AT_START.test(next)) break;
+        if (LONE_MONEY_RE.test(next)) { restWithValue = `${rest} ${next}`; break; }
+      }
+    }
+    // Extrato em que a descrição quebra em várias linhas e o valor vem na última ("PIX ENVIADO ..." / "NOME" / "-240,00").
+    if (opts.kind !== 'card' && !MONEY_TOKEN_TEST.test(rest)) {
+      const parts: string[] = [];
+      for (const next of lines.slice(lineNo + 1, lineNo + 6)) {
+        if (DATE_AT_START.test(next) || PAGE_NOISE_RE.test(next)) break;
+        if (ENDS_WITH_MONEY_RE.test(next)) { restWithValue = [rest, ...parts, next].join(' '); break; }
+        parts.push(next);
+      }
+    }
+    const tokens = [...restWithValue.matchAll(MONEY_TOKEN)];
     if (!tokens.length) continue;
 
     const first = tokens[0];
-    const description = rest.slice(0, first.index).replace(/\s+/g, ' ').trim().slice(0, 200);
+    // Faturas Nubank trazem "•••• 5802" (final do cartão) antes do estabelecimento: não é parte do nome.
+    const description = restWithValue.slice(0, first.index).replace(/^[•·*]{2,}\s?\d{4}\s+/, '').replace(/\s+/g, ' ').trim().slice(0, 200);
     if (description.length < 2) continue;
 
     const reasons: string[] = [];
@@ -149,6 +189,10 @@ export function parseStatementText(
       direction = suffix === 'C' || (suffix !== 'D' && signed < 0) ? 'in' : 'out';
     } else if (explicitSign) {
       direction = signed < 0 ? 'out' : 'in';
+    } else if (marksOutflows) {
+      // Extrato que marca as saídas com "-": valor sem sinal é entrada. Só fica sem aviso quando o texto confirma.
+      direction = 'in';
+      if (!IN_HINT.test(normalizeText(description))) reasons.push('sem sinal: lido como entrada, pois este extrato marca as saídas com "-"');
     } else {
       direction = null;
       reasons.push('o PDF não indica se é entrada ou saída');
@@ -197,6 +241,7 @@ export function parseStatementText(
     }
     if (opts.kind === 'card' && detectedTotal !== null) {
       const net = rows.filter((r) => !isStatementPaymentLine(r.description)).reduce((s, r) => s + (r.direction === 'out' ? r.abs_cents : -r.abs_cents), 0);
+      if (strongTotals.includes(net)) detectedTotal = net;
       reconciliation = detectedTotal - net;
       if (reconciliation !== 0) {
         confidence = 'low';

@@ -90,6 +90,73 @@ Total da fatura 200,00
     expect(r.rows.map((x) => x.direction)).toEqual(['out', 'in']);
   });
 
+  it('fatura com sinal de menos tipográfico (−): pagamento e crédito não viram compra e o total fecha', () => {
+    const text = [
+      'Total a pagar R$ 250,00',
+      'Pagamento em 09 OUT −R$ 100,00',
+      '02 OUT •••• 1234 Loja Exemplo R$ 200,00',
+      '03 OUT IOF de volta de Compra Teste −R$ 4,54',
+      '03 OUT •••• 1234 Outra Loja R$ 54,54',
+      '09 OUT Pagamento em 09 OUT −R$ 100,00',
+    ].join('\n');
+    const r = parseStatementText(text, { kind: 'card', refMonth: '2026-11' });
+    expect(r.rows.map((x) => [x.direction, x.abs_cents])).toEqual([['out', 20000], ['in', 454], ['out', 5454], ['in', 10000]]);
+    expect(r.rows[0].description).toBe('Loja Exemplo'); // sem o "•••• 1234"
+    expect(r.detected_total_cents).toBe(25000);
+    expect(r.reconciliation_cents).toBe(0);
+    expect(r.confidence).toBe('ok');
+  });
+
+  it('compra em moeda estrangeira: o valor em reais vem em linha separada', () => {
+    const text = ['Total a pagar R$ 129,74', '21 OUT •••• 1234 Loja Internacional', 'Cotação: USD 1 = R$ 5,18', 'R$ 129,74'].join('\n');
+    const r = parseStatementText(text, { kind: 'card', refMonth: '2026-11' });
+    expect(r.rows).toHaveLength(1);
+    expect(r.rows[0]).toMatchObject({ abs_cents: 12974, direction: 'out' });
+    expect(r.reconciliation_cents).toBe(0);
+  });
+
+  it('vários "Total a pagar" (simulação de parcelamento): vale o que fecha com as linhas', () => {
+    const text = [
+      'Parcele esta fatura com juros',
+      'valor Total a Pagar R$ 3.768,52',
+      'Total a Pagar',
+      'R$ 100,00',
+      '3 06/10 LOJA EXEMPLO 01/03 60,00',
+      '04/10 OUTRA LOJA 40,00',
+    ].join('\n');
+    const r = parseStatementText(text, { kind: 'card', refMonth: '2026-10' });
+    expect(r.rows.map((x) => x.abs_cents)).toEqual([6000, 4000]); // o "3" é a coluna Compra, "01/03" é a parcela
+    expect(r.detected_total_cents).toBe(10000);
+    expect(r.reconciliation_cents).toBe(0);
+  });
+
+  it('extrato com descrição em várias linhas, saldo do dia e saídas marcadas com "-"', () => {
+    const text = [
+      'Data Lançamentos Valor (R$) Saldo (R$)',
+      '16/11/2026 1.000,00',
+      '16/11/2026 PIX RECEBIDO FULANO TESTE 300,00',
+      '16/11/2026 PIX ENVIADO BELTRANO',
+      'DE TESTE',
+      '-50,00',
+      '-- 1 of 2 --',
+      '13/11/2026 PAGAMENTO DE BOLETO EXEMPLO -20,00',
+      '13/11/2026 TRANSFERENCIA SEM PISTA 10,00',
+      '12/11/2026 TARIFA EXEMPLO -1,00',
+    ].join('\n');
+    const r = parseStatementText(text, { kind: 'account', refMonth: '2026-11' });
+    expect(r.candidate_lines).toBe(5); // a linha de saldo do dia não conta
+    expect(r.rows.map((x) => [x.date, x.direction, x.abs_cents])).toEqual([
+      ['2026-11-16', 'in', 30000],
+      ['2026-11-16', 'out', 5000],
+      ['2026-11-13', 'out', 2000],
+      ['2026-11-13', 'in', 1000],
+      ['2026-11-12', 'out', 100],
+    ]);
+    expect(r.rows[0].uncertain_reason).toBeNull(); // "RECEBIDO" confirma a entrada
+    expect(r.rows[3].uncertain_reason).toMatch(/sem sinal/); // entrada sem confirmação no texto: pede conferência
+    expect(r.rows[1].description).toBe('PIX ENVIADO BELTRANO DE TESTE');
+  });
+
   it('não inventa nada quando não reconhece lançamentos', () => {
     const r = parseStatementText('Texto sem tabela\nOutra linha\n', { kind: 'account', refMonth: '2026-11' });
     expect(r.rows).toHaveLength(0);

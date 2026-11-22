@@ -67,16 +67,24 @@ function PayModal({ inv, defaultAccount, onClose }: { inv: Invoice; defaultAccou
 function InvoiceTotalModal({ inv, onClose }: { inv: Invoice; onClose: () => void }) {
   const refresh = useRefresh();
   const [v, setV] = useState<number | null>(inv.statement_total_cents ?? inv.lines_total_cents);
-  const save = useMutation({ mutationFn: (value: number | null) => api.patch(`/invoices/${inv.id}`, { statement_total_cents: value }), onSuccess: () => { refresh(); onClose(); } });
+  const [closing, setClosing] = useState(inv.closing_date ?? '');
+  const [due, setDue] = useState(inv.due_date);
+  const save = useMutation({
+    // Fechamento e vencimento valem o que está impresso na fatura (o banco pode variar o dia de um mês para o outro).
+    mutationFn: (value: number | null) => api.patch(`/invoices/${inv.id}`, { statement_total_cents: value, closing_date: closing || null, due_date: due }),
+    onSuccess: () => { refresh(); onClose(); },
+  });
   return (
-    <Modal title="Total da fatura" onClose={onClose}>
+    <Modal title="Total e datas da fatura" onClose={onClose}>
       <form className="form-grid" onSubmit={(e) => { e.preventDefault(); save.mutate(v); }}>
         <p className="span2 muted">Informe o total que consta na fatura do banco. Enquanto não confirmado, o valor é tratado como <Badge tone="warn">estimado</Badge> (soma das compras lançadas: {brl(inv.lines_total_cents)}).</p>
         <MoneyField label="Total da fatura" value={v} onChange={setV} required className="span2" />
+        <Field label="Fechamento" hint="Confira na fatura; muda de mês para mês em alguns bancos."><input type="date" value={closing} onChange={(e) => setClosing(e.target.value)} /></Field>
+        <Field label="Vencimento"><input type="date" value={due} onChange={(e) => setDue(e.target.value)} required /></Field>
         <div className="span2"><ErrorBox error={save.error} /></div>
         <div className="form-actions span2">
           {inv.statement_total_cents !== null && <button type="button" className="btn" onClick={() => save.mutate(null)}>Voltar a estimar</button>}
-          <button type="button" className="btn" onClick={onClose}>Cancelar</button><button className="btn primary" disabled={save.isPending}>Confirmar total</button>
+          <button type="button" className="btn" onClick={onClose}>Cancelar</button><button className="btn primary" disabled={save.isPending}>Salvar</button>
         </div>
       </form>
     </Modal>
@@ -129,7 +137,7 @@ function InvoiceCard({ inv, card, onPay, onTotal }: { inv: Invoice; card?: Card;
       )}
       <div className="tx-actions">
         <button className="btn small" onClick={() => setOpen(!open)}>{open ? 'Ocultar compras' : 'Ver compras'}</button>
-        <button className="btn small" onClick={onTotal}>{inv.statement_total_cents === null ? 'Confirmar total' : 'Editar total'}</button>
+        <button className="btn small" onClick={onTotal}>{inv.statement_total_cents === null ? 'Confirmar total' : 'Editar total e datas'}</button>
         {inv.status !== 'paid' && <button className="btn small primary" onClick={onPay}>Pagar fatura</button>}
         {inv.lines_count === 0 && inv.status !== 'paid' && <button className="btn small danger" onClick={() => confirm('Apagar esta fatura?') && del.mutate()}>Apagar</button>}
       </div>
