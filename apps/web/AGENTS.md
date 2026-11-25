@@ -6,7 +6,7 @@ Leia primeiro o `AGENTS.md` da raiz. Aqui ficam só os detalhes da interface.
 
 ```
 src/main.tsx, App.tsx   entrada, rotas (react-router) e layout
-src/pages/              Overview (Visão do mês), Transactions, Cards, Import, Settings
+src/pages/              Overview (Visão do mês), Transactions, Cards, Installments (Parcelas, todos os cartões), Import, Settings
 src/api.ts              cliente HTTP (api.get/post/put/patch/del/upload) e os TIPOS das respostas da API
 src/hooks.ts            useMonth (mês na URL ?mes=AAAA-MM), useLookups, useRefresh
 src/components.tsx      Panel, Badge, Field, MoneyField, Modal, Empty, Loading, ErrorBox

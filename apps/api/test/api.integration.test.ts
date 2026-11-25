@@ -293,6 +293,11 @@ describe.skipIf(!available)('API + PostgreSQL', () => {
       expect(list.groups).toHaveLength(1);
       expect(list.groups[0]).toMatchObject({ description: 'MAGAZINE LUIZA', total: 4, last_real_no: 2, remaining_count: 2, remaining_mine_cents: 30000, next_month: '2026-11', last_month: '2026-12' });
       expect(list.by_month.map((m: { month: string }) => m.month)).toEqual(['2026-11', '2026-12']);
+      // Visão "Parcelas": o valor de cada mês vem separado por cartão e a compra traz o que já foi pago.
+      expect(list.by_month[0].cards).toEqual([expect.objectContaining({ card_id: cardId, mine_cents: 15000, count: 1 })]);
+      expect(list.groups[0]).toMatchObject({ paid_mine_cents: 15000, end_month: '2026-12' });
+      const all = (await json('GET', '/installments?include_done=1')).body;
+      expect(all.groups.some((g: { group: string }) => g.group === list.groups[0].group)).toBe(true);
     });
 
     it('a parcela real da fatura seguinte confirma a prevista, sem duplicar', async () => {
