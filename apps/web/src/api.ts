@@ -218,9 +218,15 @@ export interface InstallmentGroup {
   group: string; card_id: number; card_name: string; description: string; total: number; last_real_no: number | null;
   remaining_count: number; remaining_mine_cents: number; remaining_total_cents: number;
   next_month: string | null; last_month: string | null; installment_mine_cents: number;
+  /** Quanto da compra já foi pago (parcelas reais, minha parte) e o último mês dela (previsto ou real). */
+  paid_mine_cents: number; end_month: string | null;
+}
+export interface InstallmentMonth {
+  month: string; mine_cents: number; count: number;
+  cards: { card_id: number; card_name: string; mine_cents: number; count: number }[];
 }
 export interface InstallmentsResponse {
-  groups: InstallmentGroup[]; by_month: { month: string; mine_cents: number; count: number }[]; remaining_mine_cents: number;
+  groups: InstallmentGroup[]; by_month: InstallmentMonth[]; remaining_mine_cents: number;
 }
 
 export interface PreviewRow {

@@ -7,6 +7,7 @@ import { addMonths, monthLabel } from './format';
 import { useMonth } from './hooks';
 import CardsPage from './pages/Cards';
 import ImportPage from './pages/Import';
+import InstallmentsPage from './pages/Installments';
 import OverviewPage from './pages/Overview';
 import QuickAddPage from './pages/QuickAdd';
 import SettingsPage from './pages/Settings';
@@ -17,6 +18,7 @@ const NAV = [
   { to: '/rapido', label: 'Lançar compra', icon: '⚡' },
   { to: '/lancamentos', label: 'Lançamentos', icon: '🧾' },
   { to: '/cartoes', label: 'Cartões e faturas', icon: '💳' },
+  { to: '/parcelas', label: 'Parcelas', icon: '🧮' },
   { to: '/importar', label: 'Importação', icon: '📥' },
   { to: '/configuracoes', label: 'Configurações', icon: '⚙️' },
 ];
@@ -26,7 +28,8 @@ export default function App() {
   const [month, setMonth] = useMonth();
   const location = useLocation();
   const search = location.search;
-  const showMonth = location.pathname !== '/configuracoes';
+  // Configurações e Parcelas não dependem do mês escolhido.
+  const showMonth = location.pathname !== '/configuracoes' && location.pathname !== '/parcelas';
 
   // Gera os lançamentos previstos das recorrências do mês (idempotente) antes de exibir os dados.
   const ensure = useQuery({
@@ -87,6 +90,7 @@ export default function App() {
               <Route path="/rapido" element={<QuickAddPage />} />
               <Route path="/lancamentos" element={<TransactionsPage month={month} />} />
               <Route path="/cartoes" element={<CardsPage month={month} />} />
+              <Route path="/parcelas" element={<InstallmentsPage />} />
               <Route path="/importar" element={<ImportPage month={month} />} />
               <Route path="/configuracoes" element={<SettingsPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />

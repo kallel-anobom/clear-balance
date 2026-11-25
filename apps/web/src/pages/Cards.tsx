@@ -274,7 +274,7 @@ function InstallmentsPanel({ cardId }: { cardId: number | 'all' }) {
   const months = q.data!.by_month.map((m) => [m.month, m.mine_cents] as const);
   const max = Math.max(...months.map(([, v]) => v), 1);
   return (
-    <Panel title="Parcelas futuras" action={<span className="muted small">ainda a cair: {brl(total)} (minha parte)</span>}>
+    <Panel title="Parcelas futuras" action={<span className="muted small">ainda a cair: {brl(total)} (minha parte) · <Link to="/parcelas">ver todas as parcelas</Link></span>}>
       <p className="muted small">Compras parceladas detectadas nas faturas (“PARC 02/10”) ou lançadas por você. As parcelas que faltam são <Badge tone="warn">projetadas</Badge> nas próximas faturas com o mesmo valor — são estimativas até aparecerem na fatura real.</p>
       <ul className="rows">{groups.map((g) => (
         <li className="row" key={g.group}>
